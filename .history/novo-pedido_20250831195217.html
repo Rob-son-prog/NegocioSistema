@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8" />
+  <title>Novo pedido</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <link rel="stylesheet" href="style.css?v=6" />
+</head>
+<body class="dashboard">
+  <div class="layout">
+    <aside class="sidebar">
+      <div class="brand">Meu Painel</div>
+      <nav class="menu">
+        <a href="portal.html" class="item">Voltar ao portal</a>
+      </nav>
+    </aside>
+
+    <main class="content">
+      <header class="topbar"><h2>Solicitar novo pedido</h2></header>
+
+      <section class="panel">
+        <div class="panel-body">
+          <form id="formPedido" class="form">
+            <label>Nome do produto</label>
+            <input id="produto" type="text" placeholder="Ex: Notebook Dell 15" required />
+
+            <label>Valor aproximado (R$)</label>
+            <input id="valor" type="text" placeholder="Ex: 3.500,00" required />
+
+            <div class="row">
+              <button type="submit" class="btn primary">Solicitar</button>
+              <a class="btn ghost" href="aprovacoes.html">Cancelar</a>
+            </div>
+            <p id="out" class="muted" style="margin-top:.5rem;"></p>
+          </form>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <script src="config.js"></script>
+  <script src="novo-pedido.js?v=3"></script>
+</body>
+</html>

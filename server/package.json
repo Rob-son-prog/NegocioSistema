@@ -1,0 +1,18 @@
+{
+  "name": "login-api",
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "node index.js",
+    "db:list": "node tools/check-db.js list",
+    "db:normalize": "node tools/check-db.js normalize"
+  },
+  "dependencies": {
+    "bcryptjs": "^2.4.3",
+    "better-sqlite3": "^9.4.3",
+    "cors": "^2.8.5",
+    "dotenv": "^16.6.1",
+    "express": "^4.21.2",
+    "jsonwebtoken": "^9.0.2"
+  }
+}

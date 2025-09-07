@@ -1,0 +1,81 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Acesso do cliente</title>
+  <link rel="stylesheet" href="style.css?v=6" />
+</head>
+<body class="dashboard">
+  <div class="content" style="max-width:420px;margin:40px auto">
+    <h2>Portal do cliente</h2>
+    <p class="muted">Digite seu CPF para acessar seus boletos/parcelas.</p>
+
+    <form id="formLogin" class="card" style="padding:16px;display:grid;gap:12px;">
+      <label>CPF
+        <input id="cpf" inputmode="numeric" autocomplete="username" placeholder="000.000.000-00" required />
+      </label>
+      <button id="btn" class="btn primary" type="submit">Entrar</button>
+      <p id="out" class="muted"></p>
+    </form>
+  </div>
+
+  <script>
+    
+
+  (function(){
+    cconst API = 'http://127.0.0.1:4000';
+
+    const TOKEN_KEY = 'client_token'; // <-- padronizado com o portal.html
+
+    // Se já tem sessão, pula direto pro portal
+    const already = localStorage.getItem(TOKEN_KEY);
+    if (already) { location.href = 'portal.html'; return; }
+
+    const form = document.getElementById('formLogin');
+    const cpfEl = document.getElementById('cpf');
+    const out = document.getElementById('out');
+    const btn = document.getElementById('btn');
+
+    // máscara simples de CPF
+    cpfEl.addEventListener('input', ()=>{
+      let v = cpfEl.value.replace(/\D/g,'').slice(0,11);
+      v = v.replace(/(\d{3})(\d)/,'$1.$2')
+           .replace(/(\d{3})(\d)/,'$1.$2')
+           .replace(/(\d{3})(\d{1,2})$/,'$1-$2');
+      cpfEl.value = v;
+    });
+
+    form.addEventListener('submit', async (e)=>{
+      e.preventDefault();
+      out.textContent = '';
+      const cpf = cpfEl.value.replace(/\D/g,'');
+      if (cpf.length !== 11){ out.textContent = 'CPF inválido.'; return; }
+
+      btn.disabled = true;
+      try{
+        // ROTA CORRETA DO SERVIDOR
+        const res = await fetch(API + '/api/client/login', {
+         method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ cpf })
+        });
+
+     
+        const data = await res.json();
+        if (!res.ok){
+          out.textContent = data?.error || 'Não foi possível entrar.';
+          btn.disabled = false;
+          return;
+        }
+        localStorage.setItem(TOKEN_KEY, data.token);
+        location.href = 'portal.html'; // portal vai ler client_token
+      }catch(err){
+        out.textContent = 'Falha de conexão com o servidor.';
+        btn.disabled = false;
+      }
+    });
+  })();
+  </script>
+</body>
+</html>

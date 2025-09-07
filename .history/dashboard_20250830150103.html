@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="pt">
+<head>
+  <meta charset="utf-8" />
+  <title>Painel</title>
+  <link rel="stylesheet" href="style.css?v=3">
+</head>
+<body class="dashboard">
+  <div class="layout">
+    <!-- SIDEBAR -->
+    <aside class="sidebar">
+      <div class="brand">Meu Painel</div>
+      <nav class="menu">
+        <a href="cadastro.html" class="item"><span>Cadastro de cliente</span></a>
+        <a href="aprovacoes.html" class="item"><span>Aprovar compras</span></a>
+        <a href="index.html" class="item danger" id="logout"><span>Sair</span></a>
+      </nav>
+    </aside>
+
+    <!-- CONTEÚDO -->
+    <main class="content">
+      <header class="topbar">
+        <div class="hello">
+          <h1 id="hello">Olá</h1>
+          <p id="email" class="muted"></p>
+        </div>
+      </header>
+
+      <!-- CARDS DE MÉTRICAS -->
+      <section class="cards">
+        <div class="card">
+          <div class="card-title">Recebidos (mês)</div>
+          <div id="kpi-recebidos" class="card-value">R$ 0,00</div>
+        </div>
+        <div class="card">
+          <div class="card-title">Negócios feitos</div>
+          <div id="kpi-negocios" class="card-value">0</div>
+        </div>
+        <div class="card">
+          <div class="card-title">Vendas (mês)</div>
+          <div id="kpi-vendas" class="card-value">R$ 0,00</div>
+        </div>
+      </section>
+
+      <!-- PEDIDOS RECENTES (lista compacta, 1 por linha) -->
+      <section class="panel">
+        <div class="panel-header">
+          <h3>Pedidos recentes</h3>
+        </div>
+        <div class="panel-body">
+          <!-- *** importante: id e classes batendo com o seu CSS *** -->
+          <div id="ordersRow" class="orders-row">
+            <div class="muted">Carregando…</div>
+          </div>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <script src="dashboard.js"></script>
+</body>
+</html>
