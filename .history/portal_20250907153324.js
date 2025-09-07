@@ -153,38 +153,20 @@ function render(data){
     try { localStorage.setItem('clienteId', cid); localStorage.setItem('cpf', cpf); } catch {}
   }
 
-  // ====== CÁLCULO CORRIGIDO ======
-  const isPaid = (p) => String(p.status || '').toLowerCase() === 'pago';
-
-  // Total bruto (todas as parcelas) – se precisar em outro lugar
-  const totalBruto = installments.reduce(
-    (s, p) => s + Number(p.value ?? p.valor ?? 0), 0
-  );
-
-  // Saldo em aberto (somente parcelas não pagas)
-  const saldoAberto = installments
-    .filter(p => !isPaid(p))
-    .reduce((s, p) => s + Number(p.value ?? p.valor ?? 0), 0);
-
-  // COMPATIBILIDADE: mantém o nome `total`
-  const total = saldoAberto;
-
-  const pagas = installments.filter(isPaid).length;
+  const total = installments.reduce((s,p)=>s+Number(p.value??p.valor??0),0);
+  const pagas = installments.filter(p => String(p.status||'').toLowerCase()==='pago').length;
 
   if (el.kTotal) el.kTotal.textContent = brl(total);
   if (el.kPagas) el.kPagas.textContent = String(pagas);
   if (el.kStatus){
     const today=new Date(); today.setHours(0,0,0,0);
     const atrasado = installments.some(p=>{
-      if (isPaid(p)) return false;
-      const d=new Date((p.due||p.venc||'')+'T00:00:00');
-      return d<today;
+      if (String(p.status||'').toLowerCase()==='pago') return false;
+      const d=new Date((p.due||p.venc||'')+'T00:00:00'); return d<today;
     });
     el.kStatus.className='pill '+(pagas===installments.length && installments.length? 'pago' : (atrasado?'atrasado':'aberto'));
     el.kStatus.textContent = (pagas===installments.length && installments.length)? 'Pago' : (atrasado?'Atrasado':'Aberto');
   }
-
-  if (el.msg) el.msg.textContent = '';
 
   if (!el.parcelas) return;
   el.parcelas.innerHTML = '';
