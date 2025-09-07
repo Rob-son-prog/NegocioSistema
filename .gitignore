@@ -1,0 +1,12 @@
+﻿node_modules/
+server/node_modules/
+dist/
+build/
+.vscode/
+*.log
+.env
+.env.*
+server/data.sqlite
+server/data.sqlite-*
+data.sqlite
+data.sqlite-*
