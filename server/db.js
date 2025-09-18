@@ -1,181 +1,106 @@
 // server/db.js
-import path from 'node:path';
-import { fileURLToPath } from 'node:url';
 import Database from 'better-sqlite3';
+import { fileURLToPath } from 'url';
+import path from 'path';
 import bcrypt from 'bcryptjs';
 
-export const normalizeCpf = (cpf) => (cpf || '').replace(/\D/g, '');
-
-// --------- helpers (contratos) ----------
-function splitInInstallments(total, n) {
-  const cents = Math.round(total * 100);
-  const base = Math.floor(cents / n);
-  const resto = cents - base * n;
-  const valores = Array.from({ length: n }, (_, i) => (i < resto ? base + 1 : base));
-  return valores.map(v => v / 100);
-}
-function addMonthsISO(isoDate, add) {
-  const d = new Date(isoDate + 'T00:00:00');
-  d.setMonth(d.getMonth() + add);
-  const mm = String(d.getMonth() + 1).padStart(2, '0');
-  const dd = String(d.getDate()).padStart(2, '0');
-  return `${d.getFullYear()}-${mm}-${dd}`;
-}
-
-// --------- DB init ----------
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const DB_PATH = path.resolve(__dirname, '../data.sqlite');
-export const db = new Database(DB_PATH, { verbose: null });
-console.log('DB file:', DB_PATH);
+const dbPath = path.join(__dirname, 'data', 'data.sqlite');
+const db = new Database(dbPath);
 
-db.pragma('foreign_keys = ON');
-db.pragma('journal_mode = WAL');
-
-// --------- Tabelas ----------
+// ---------- criação de tabelas (idempotente) ----------
 db.exec(`
-CREATE TABLE IF NOT EXISTS users(
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  name TEXT NOT NULL,
-  email TEXT UNIQUE NOT NULL,
-  password_hash TEXT NOT NULL,
-  role TEXT NOT NULL DEFAULT 'admin'
-);
-
 CREATE TABLE IF NOT EXISTS customers (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  name TEXT NOT NULL,
-  email TEXT,
-  phone TEXT,
-  cpf TEXT,
-  created_at TEXT DEFAULT (datetime('now'))
+  id          INTEGER PRIMARY KEY AUTOINCREMENT,
+  name        TEXT NOT NULL,
+  email       TEXT,
+  phone       TEXT,
+  cpf         TEXT NOT NULL UNIQUE,   -- guardar só dígitos
+  created_at  TEXT DEFAULT (datetime('now'))
 );
 
 CREATE TABLE IF NOT EXISTS contracts (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  id          INTEGER PRIMARY KEY AUTOINCREMENT,
   customer_id INTEGER NOT NULL REFERENCES customers(id) ON DELETE CASCADE,
-  total REAL NOT NULL,
-  parcelas INTEGER NOT NULL,
-  first_due TEXT NOT NULL,
-  created_at TEXT DEFAULT (datetime('now'))
+  total       REAL NOT NULL,
+  tipo        TEXT NOT NULL DEFAULT 'negocio', -- negocio | venda
+  created_at  TEXT DEFAULT (datetime('now'))
 );
 
 CREATE TABLE IF NOT EXISTS installments (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  id          INTEGER PRIMARY KEY AUTOINCREMENT,
   contract_id INTEGER NOT NULL REFERENCES contracts(id) ON DELETE CASCADE,
-  value REAL NOT NULL,
-  due TEXT NOT NULL,
-  status TEXT DEFAULT 'pendente',
-  paid_at TEXT
+  value       REAL NOT NULL,
+  due         TEXT NOT NULL,      -- 'YYYY-MM-DD'
+  status      TEXT NOT NULL DEFAULT 'pendente', -- pendente | pago
+  paid_at     TEXT                 -- datetime ISO
 );
 
--- Pedidos do cliente (para "Aprovar compras")
-CREATE TABLE IF NOT EXISTS order_requests (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  customer_id INTEGER NOT NULL REFERENCES customers(id) ON DELETE CASCADE,
-  product TEXT NOT NULL,
-  amount REAL NOT NULL,
-  status TEXT NOT NULL DEFAULT 'pendente',   -- pendente | aprovado | recusado
-  created_at TEXT DEFAULT (datetime('now')),
-  decided_at TEXT,
-  decision_note TEXT
+CREATE TABLE IF NOT EXISTS orders (
+  id            INTEGER PRIMARY KEY AUTOINCREMENT,
+  customer_id   INTEGER NOT NULL REFERENCES customers(id) ON DELETE CASCADE,
+  product       TEXT NOT NULL,
+  amount        REAL NOT NULL,
+  status        TEXT NOT NULL DEFAULT 'pendente', -- pendente | aprovado | recusado
+  decision_note TEXT,
+  created_at    TEXT DEFAULT (datetime('now')),
+  updated_at    TEXT,
+  decided_at    TEXT
+);
+
+-- opcional: tabela de usuários admin (usamos fallback do .env se vazia)
+CREATE TABLE IF NOT EXISTS users (
+  id            INTEGER PRIMARY KEY AUTOINCREMENT,
+  name          TEXT NOT NULL,
+  email         TEXT NOT NULL UNIQUE,
+  password_hash TEXT NOT NULL,
+  role          TEXT NOT NULL DEFAULT 'admin'
 );
 `);
 
-// índice único opcional para CPF não vazio
-db.exec(`
-  CREATE UNIQUE INDEX IF NOT EXISTS idx_customers_cpf
-  ON customers(cpf)
-  WHERE cpf IS NOT NULL AND cpf <> '';
-`);
-
-// --------- Seed admin ----------
-(function ensureAdminUser(){
-  const exists = db.prepare('SELECT 1 FROM users LIMIT 1').get();
-  if (!exists) {
-    const email = 'admin@hiveloja.com.br';
-    const hash = bcrypt.hashSync('123456', 10);
-    db.prepare(`
-      INSERT INTO users (name, email, password_hash, role)
-      VALUES (?, ?, ?, 'admin')
-    `).run('Admin', email.toLowerCase(), hash);
-    console.log('✔️ Seed admin => admin@hiveloja.com.br / 123456');
-  }
-})();
-
-// --------- Domínio: usuários/clientes ----------
-export function findUserByEmail(email) {
-  return db.prepare(`
-    SELECT id, name, email, password_hash, role
-    FROM users
-    WHERE lower(email) = lower(?)
-  `).get(email);
+// ---------- helpers ----------
+const onlyDigits = (s) => String(s || '').replace(/\D/g, '');
+function normalizeCpf(cpf) {
+  const d = onlyDigits(cpf).padStart(11, '0').slice(0, 11);
+  return d.replace(/^(\d{3})(\d{3})(\d{3})(\d{2})$/, '$1.$2.$3-$4');
 }
-export function findCustomerByCPF(cpf) {
-  const ncpf = normalizeCpf(cpf);
-  return db.prepare(`SELECT * FROM customers WHERE cpf = ?`).get(ncpf);
-}
-export function createCustomer({ name, email, phone, cpf }) {
-  const ncpf = normalizeCpf(cpf);
-  return db.prepare(`
+const toISODate = (d) =>
+  new Date(d).toISOString().slice(0, 10); // YYYY-MM-DD
+
+// ---------- admin por .env (fallback) ----------
+const ENV_ADMIN = {
+  name: process.env.ADMIN_NAME || 'Admin',
+  email: process.env.ADMIN_EMAIL || 'admin@example.com',
+  password_hash: bcrypt.hashSync(process.env.ADMIN_PASSWORD || 'admin123', 10),
+  role: 'admin',
+};
+
+// ---------- clientes ----------
+function createCustomer({ name, email = null, phone = null, cpf }) {
+  const cpfDigits = onlyDigits(cpf);
+  const stmt = db.prepare(`
     INSERT INTO customers (name, email, phone, cpf)
     VALUES (?, ?, ?, ?)
-  `).run(name, email ?? null, phone ?? null, ncpf || null);
-}
-export function listCustomers() {
-  return db.prepare(`
-    SELECT id, name, email, phone, cpf, created_at
-    FROM customers
-    ORDER BY id DESC
-  `).all();
-}
-
-// --------- Domínio: contratos/parcelas ----------
-export function createContractAndInstallments({ customer_id, total, parcelas, first_due }) {
-  const info = db.prepare(`
-    INSERT INTO contracts (customer_id, total, parcelas, first_due)
-    VALUES (?, ?, ?, ?)
-  `).run(customer_id, total, parcelas, first_due);
-
-  const contract_id = info.lastInsertRowid;
-  const valores = splitInInstallments(total, parcelas);
-
-  const ins = db.prepare(`
-    INSERT INTO installments (contract_id, value, due, status)
-    VALUES (?, ?, ?, 'pendente')
   `);
-  const tx = db.transaction(() => {
-    for (let i = 0; i < parcelas; i++) {
-      const due = addMonthsISO(first_due, i);
-      ins.run(contract_id, valores[i], due);
-    }
-  });
-  tx();
+  return stmt.run(name, email, phone, cpfDigits);
+}
 
-  return contract_id;
+function findCustomerByCPF(cpf) {
+  const cpfDigits = onlyDigits(cpf);
+  const row = db.prepare(`SELECT * FROM customers WHERE cpf = ?`).get(cpfDigits);
+  return row || null;
 }
-export function listRecentContracts(limit = 25) {
-  return db.prepare(`
-    SELECT c.id, c.customer_id, c.total, c.parcelas, c.first_due, c.created_at,
-           cu.name AS customer_name, cu.cpf
-    FROM contracts c
-    JOIN customers cu ON cu.id = c.customer_id
-    ORDER BY c.id DESC
-    LIMIT ?
-  `).all(limit);
-}
-export function getPortalDataByCustomerId(customerId) {
-  const customer = db.prepare(`
-    SELECT id, name, email, phone, cpf
-    FROM customers
-    WHERE id = ?
-  `).get(customerId);
+
+// ---------- portal do cliente ----------
+function getPortalDataByCustomerId(customerId) {
+  const customer = db.prepare(`SELECT id, name, cpf FROM customers WHERE id = ?`).get(customerId);
   if (!customer) return null;
 
   const contracts = db.prepare(`
-    SELECT id, total, parcelas, first_due, created_at
+    SELECT id, customer_id, total, tipo, created_at
     FROM contracts
     WHERE customer_id = ?
-    ORDER BY id DESC
+    ORDER BY datetime(created_at) DESC
   `).all(customerId);
 
   const installments = db.prepare(`
@@ -183,115 +108,228 @@ export function getPortalDataByCustomerId(customerId) {
     FROM installments i
     JOIN contracts c ON c.id = i.contract_id
     WHERE c.customer_id = ?
-    ORDER BY i.due ASC
-  `).all(customerId);
+    ORDER BY date(i.due) ASC, i.id ASC
+  `).all(customerId)
+   // compatibilidade com o front (value/valor, due/venc)
+   .map(i => ({
+      id: i.id,
+      contract_id: i.contract_id,
+      value: i.value,  valor: i.value,
+      due: i.due,      venc: i.due,
+      status: i.status,
+      paid_at: i.paid_at
+    }));
 
   return { customer, contracts, installments };
 }
-export function markInstallmentPaid(id) {
-  const today = new Date().toISOString().slice(0, 10);
-  return db.prepare(`
-    UPDATE installments
-       SET status = 'pago',
-           paid_at = ?
-     WHERE id = ?
-  `).run(today, id);
-}
-export function updateInstallment({ id, value, due, status }) {
-  const cur = db.prepare(`SELECT * FROM installments WHERE id = ?`).get(id);
-  if (!cur) throw new Error('Parcela não encontrada');
 
-  const nv = (value  ?? cur.value);
-  const nd = (due    ?? cur.due);
-  const ns = (status ?? cur.status);
+// ---------- auth admin ----------
+function findUserByEmail(email) {
+  const row = db.prepare(`SELECT * FROM users WHERE lower(email) = lower(?)`).get(String(email || '').trim());
+  if (row) return row;
 
-  return db.prepare(`
-    UPDATE installments
-       SET value = ?, due = ?, status = ?
-     WHERE id = ?
-  `).run(nv, nd, ns, id);
-}
-export function deleteInstallment(id) {
-  return db.prepare(`DELETE FROM installments WHERE id = ?`).run(id);
-}
-export function deleteContract(contractId) {
-  return db.prepare(`DELETE FROM contracts WHERE id = ?`).run(contractId);
+  // fallback para usuário do .env (não grava em disco)
+  if (String(email || '').trim().toLowerCase() === String(ENV_ADMIN.email).toLowerCase()) {
+    return { id: 0, name: ENV_ADMIN.name, email: ENV_ADMIN.email, password_hash: ENV_ADMIN.password_hash, role: 'admin' };
+  }
+  return null;
 }
 
-// --------- Pedidos (order_requests) ----------
-export function createOrderRequest({ customer_id, product, amount }) {
+// ---------- contratos & parcelas ----------
+function createContractAndInstallments({ customer_id, total, parcelas, first_due, tipo = 'negocio' }) {
+  const insertContract = db.prepare(`
+    INSERT INTO contracts (customer_id, total, tipo) VALUES (?, ?, ?)
+  `);
+  const insertInst = db.prepare(`
+    INSERT INTO installments (contract_id, value, due) VALUES (?, ?, ?)
+  `);
+
+  const tx = db.transaction(() => {
+    const { lastInsertRowid: contract_id } = insertContract.run(customer_id, Number(total), String(tipo));
+
+    // distribuição simples das parcelas (última recebe o ajuste de centavos)
+    const n = Number(parcelas);
+    const each = Math.floor((Number(total) / n) * 100) / 100;
+    const last = Math.round((Number(total) - each * (n - 1)) * 100) / 100;
+
+    const start = new Date(`${first_due}T00:00:00`);
+    for (let i = 0; i < n; i++) {
+      const dt = new Date(start);
+      dt.setMonth(dt.getMonth() + i);
+      const due = toISODate(dt);
+      const value = (i === n - 1) ? last : each;
+      insertInst.run(contract_id, value, due);
+    }
+    return contract_id;
+  });
+
+  return tx();
+}
+
+function listRecentContracts(limit = 25) {
   return db.prepare(`
-    INSERT INTO order_requests (customer_id, product, amount)
+    SELECT c.id, c.customer_id, c.total, c.tipo, c.created_at,
+           u.name AS customer_name
+    FROM contracts c
+    JOIN customers u ON u.id = c.customer_id
+    ORDER BY datetime(c.created_at) DESC
+    LIMIT ?
+  `).all(Number(limit));
+}
+
+function markInstallmentPaid(id) {
+  const now = new Date().toISOString();
+  return db.prepare(`
+    UPDATE installments SET status = 'pago', paid_at = ?
+    WHERE id = ?
+  `).run(now, id);
+}
+
+function updateInstallment({ id, value, due, status }) {
+  // constrói dinamicamente os campos enviados
+  const sets = [];
+  const args = [];
+  if (value !== undefined) { sets.push('value = ?'); args.push(Number(value)); }
+  if (due   !== undefined) { sets.push('due = ?');   args.push(String(due)); }
+  if (status!== undefined) { sets.push('status = ?');args.push(String(status)); }
+  if (!sets.length) return { changes: 0 };
+  args.push(Number(id));
+  const sql = `UPDATE installments SET ${sets.join(', ')} WHERE id = ?`;
+  return db.prepare(sql).run(...args);
+}
+
+function deleteInstallment(id) {
+  return db.prepare(`DELETE FROM installments WHERE id = ?`).run(Number(id));
+}
+
+function deleteContract(id) {
+  const tx = db.transaction(() => {
+    db.prepare(`DELETE FROM installments WHERE contract_id = ?`).run(Number(id));
+    db.prepare(`DELETE FROM contracts WHERE id = ?`).run(Number(id));
+  });
+  tx();
+  return { ok: true };
+}
+
+// ---------- pedidos (aprovar compras) ----------
+function createOrderRequest({ customer_id, product, amount }) {
+  return db.prepare(`
+    INSERT INTO orders (customer_id, product, amount)
     VALUES (?, ?, ?)
-  `).run(customer_id, String(product).trim(), Number(amount));
+  `).run(customer_id, product, Number(amount));
 }
 
-/* Lista pedidos.
-   - status=null/undefined => lista todos
-   - status='pendente'|'aprovado'|'recusado' => filtra por status (case-insensitive) */
-export function listOrderRequests(status = null) {
-  let sql = `
+function listOrderRequests(status = 'pendente') {
+  return db.prepare(`
     SELECT o.*, c.name AS customer_name, c.cpf
-    FROM order_requests o
+    FROM orders o
     JOIN customers c ON c.id = o.customer_id
-  `;
-  const hasFilter = !!status;
-  if (hasFilter) sql += ` WHERE lower(o.status) = lower(?) `;
-  sql += ` ORDER BY o.id DESC`;
-  return hasFilter ? db.prepare(sql).all(status) : db.prepare(sql).all();
+    WHERE o.status = ?
+    ORDER BY datetime(o.created_at) DESC
+  `).all(String(status));
 }
 
-export function listOrderRequestsByCustomer(customer_id) {
+function listOrderRequestsByCustomer(customer_id) {
   return db.prepare(`
-    SELECT id, product, amount, status, created_at, decided_at, decision_note
-    FROM order_requests
+    SELECT * FROM orders
     WHERE customer_id = ?
-    ORDER BY id DESC
-  `).all(customer_id);
+    ORDER BY datetime(created_at) DESC
+  `).all(Number(customer_id));
 }
 
-// Atualiza status (normaliza para minúsculas e registra decisão)
-export function setOrderRequestStatus(id, status, note = null) {
-  const st = String(status).toLowerCase(); // 'aprovado' | 'recusado'
+function setOrderRequestStatus(id, status, note = null) {
+  const now = new Date().toISOString();
+  const decided = (status === 'aprovado' || status === 'recusado') ? now : null;
   return db.prepare(`
-    UPDATE order_requests
-       SET status = ?, decided_at = datetime('now'), decision_note = ?
-     WHERE id = ?
-  `).run(st, note, Number(id));
+    UPDATE orders
+    SET status = ?, decision_note = ?, updated_at = ?, decided_at = ?
+    WHERE id = ?
+  `).run(String(status), note, now, decided, Number(id));
 }
 
-export function deleteOrderRequest(id) {
-  return db.prepare(`DELETE FROM order_requests WHERE id = ?`).run(Number(id));
+function deleteOrderRequest(id) {
+  return db.prepare(`DELETE FROM orders WHERE id = ?`).run(Number(id));
 }
 
-// --------- KPIs (recebidos) ----------
-function monthRange(year, month) {
-  const y = String(year);
-  const m = String(month).padStart(2, '0');
-  const start = `${y}-${m}-01`;
-  const end = db.prepare(`SELECT DATE(?, '+1 month') AS d`).get(start).d;
-  return { start, end };
+// ---------- KPIs ----------
+function monthEdges(year, month) {
+  const start = new Date(Date.UTC(year, month - 1, 1));
+  const end = new Date(Date.UTC(year, month, 1));
+  const s = start.toISOString().slice(0, 10);
+  const e = end.toISOString().slice(0, 10);
+  return { s, e };
 }
-export function sumReceivedByMonth(year, month) {
-  const { start, end } = monthRange(year, month);
-  const row = db.prepare(`
-    SELECT COALESCE(SUM(value), 0) AS total,
-           COUNT(*)                 AS count
-    FROM installments
-    WHERE LOWER(status) = 'pago'
-      AND paid_at >= ?
-      AND paid_at <  ?
-  `).get(start, end);
-  return row; // { total, count }
-}
-export function sumReceivedForMonth(year, month) {
-  const ym = `${year}-${String(month).padStart(2, '0')}`;
+
+function sumReceivedForMonth(year, month) {
+  const { s, e } = monthEdges(Number(year), Number(month));
   const row = db.prepare(`
     SELECT COALESCE(SUM(value), 0) AS total
     FROM installments
-    WHERE LOWER(status) = 'pago'
-      AND paid_at IS NOT NULL
-      AND strftime('%Y-%m', paid_at) = ?
-  `).get(ym);
-  return row.total || 0;
+    WHERE status = 'pago'
+      AND date(paid_at) >= date(?)
+      AND date(paid_at) <  date(?)
+  `).get(s, e);
+  return Number(row?.total || 0);
 }
+
+function sumReceivedByMonth(year, month) {
+  const { s, e } = monthEdges(Number(year), Number(month));
+  const row = db.prepare(`
+    SELECT COALESCE(SUM(value), 0) AS total,
+           COUNT(*) AS count
+    FROM installments
+    WHERE status = 'pago'
+      AND date(paid_at) >= date(?)
+      AND date(paid_at) <  date(?)
+  `).get(s, e);
+  return { total: Number(row?.total || 0), count: Number(row?.count || 0) };
+}
+
+// ---------- PIX helper ----------
+function getInstallmentWithCustomer(installmentId) {
+  return db.prepare(`
+    SELECT i.id, i.value, i.status, i.due, i.paid_at,
+           c.id AS contract_id, c.customer_id,
+           u.name AS customer_name, u.email, u.cpf
+    FROM installments i
+    JOIN contracts c ON c.id = i.contract_id
+    JOIN customers u ON u.id = c.customer_id
+    WHERE i.id = ?
+  `).get(Number(installmentId));
+}
+
+// ---------- exports ----------
+export {
+  // helpers
+  normalizeCpf,
+
+  // clientes/portal
+  createCustomer,
+  findCustomerByCPF,
+  getPortalDataByCustomerId,
+
+  // auth admin
+  findUserByEmail,
+
+  // contratos/parcelas
+  createContractAndInstallments,
+  listRecentContracts,
+  markInstallmentPaid,
+  updateInstallment,
+  deleteInstallment,
+  deleteContract,
+
+  // pedidos
+  createOrderRequest,
+  listOrderRequests,
+  listOrderRequestsByCustomer,
+  setOrderRequestStatus,
+  deleteOrderRequest,
+
+  // KPIs
+  sumReceivedForMonth,
+  sumReceivedByMonth,
+
+  // PIX
+  getInstallmentWithCustomer,
+};

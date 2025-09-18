@@ -1,12 +1,25 @@
-﻿node_modules/
+﻿# deps e builds
+node_modules/
 server/node_modules/
 dist/
 build/
+
+# IDE e históricos
 .vscode/
+.history/
 *.log
+
+# SO
+.DS_Store
+Thumbs.db
+
+# env/segredos
 .env
 .env.*
-server/data.sqlite
-server/data.sqlite-*
-data.sqlite
-data.sqlite-*
+!*.example
+
+# bancos SQLite (raiz e /server)
+*.sqlite
+*.sqlite-*
+data.sqlite*
+server/data.sqlite*

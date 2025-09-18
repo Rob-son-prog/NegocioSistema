@@ -1,5 +1,5 @@
 // ======== PORTAL (API MODE) ========
-const API = 'http://127.0.0.1:4000';
+const API = window.API || 'http://127.0.0.1:4000';
 const TOKEN_KEY = 'client_token';
 const $  = (s) => document.querySelector(s);
 const brl = (v) => (Number(v || 0)).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
@@ -45,6 +45,12 @@ function normStatus(s){
   if (s === 'reprovado' || s === 'recusado') return 'rejected';
   if (s === 'pendente') return 'pending';
   return s;
+}
+
+// parcelas excluídas/canceladas (se algum dia tiver soft-delete)
+function isRemoved(p){
+  const st = String(p?.status || '').toLowerCase();
+  return !!(p?.deleted || p?.is_deleted || p?.excluido || p?.deleted_at || st === 'cancelado' || st === 'excluido' || st === 'excluído');
 }
 
 // ---- UI instantânea via evento
@@ -153,44 +159,30 @@ function render(data){
     try { localStorage.setItem('clienteId', cid); localStorage.setItem('cpf', cpf); } catch {}
   }
 
-  // ====== CÁLCULO CORRIGIDO ======
-  const isPaid = (p) => String(p.status || '').toLowerCase() === 'pago';
+  const visiveis = installments.filter(p => !isRemoved(p));
+  const totalAberto = visiveis
+    .filter(p => String(p.status || '').toLowerCase() !== 'pago')
+    .reduce((s,p) => s + Number(p.value ?? p.valor ?? 0), 0);
 
-  // Total bruto (todas as parcelas) – se precisar em outro lugar
-  const totalBruto = installments.reduce(
-    (s, p) => s + Number(p.value ?? p.valor ?? 0), 0
-  );
+  const pagas = visiveis.filter(p => String(p.status||'').toLowerCase()==='pago').length;
 
-  // Saldo em aberto (somente parcelas não pagas)
-  const saldoAberto = installments
-    .filter(p => !isPaid(p))
-    .reduce((s, p) => s + Number(p.value ?? p.valor ?? 0), 0);
-
-  // COMPATIBILIDADE: mantém o nome `total`
-  const total = saldoAberto;
-
-  const pagas = installments.filter(isPaid).length;
-
-  if (el.kTotal) el.kTotal.textContent = brl(total);
+  if (el.kTotal) el.kTotal.textContent = brl(totalAberto);
   if (el.kPagas) el.kPagas.textContent = String(pagas);
   if (el.kStatus){
     const today=new Date(); today.setHours(0,0,0,0);
-    const atrasado = installments.some(p=>{
-      if (isPaid(p)) return false;
-      const d=new Date((p.due||p.venc||'')+'T00:00:00');
-      return d<today;
+    const atrasado = visiveis.some(p=>{
+      if (String(p.status||'').toLowerCase()==='pago') return false;
+      const d=new Date((p.due||p.venc||'')+'T00:00:00'); return d<today;
     });
-    el.kStatus.className='pill '+(pagas===installments.length && installments.length? 'pago' : (atrasado?'atrasado':'aberto'));
-    el.kStatus.textContent = (pagas===installments.length && installments.length)? 'Pago' : (atrasado?'Atrasado':'Aberto');
+    el.kStatus.className='pill '+(pagas===visiveis.length && visiveis.length? 'pago' : (atrasado?'atrasado':'aberto'));
+    el.kStatus.textContent = (pagas===visiveis.length && visiveis.length)? 'Pago' : (atrasado?'Atrasado':'Aberto');
   }
-
-  if (el.msg) el.msg.textContent = '';
 
   if (!el.parcelas) return;
   el.parcelas.innerHTML = '';
-  if (!installments.length){ el.parcelas.innerHTML = '<div class="muted">Não há parcelas para exibir.</div>'; return; }
+  if (!visiveis.length){ el.parcelas.innerHTML = '<div class="muted">Não há parcelas para exibir.</div>'; return; }
 
-  const sorted = [...installments].sort((a,b)=> (a.due<b.due?-1:1));
+  const sorted = [...visiveis].sort((a,b)=> (a.due<b.due?-1:1));
   sorted.forEach((p, idx)=>{
     const value  = Number(p.value ?? p.valor ?? 0);
     const valStr = brl(value);
@@ -221,8 +213,8 @@ function render(data){
     el.parcelas.appendChild(row);
   });
 
-  // >>>>>>> HANDLER RESTAURADO (admin: PIX / BAIXAR / EXCLUIR)
-  el.parcelas.onclick = async (e) => {
+  // >>> Ações (PIX / BAIXAR / EXCLUIR)
+  el.parcelas.onclick = async (e)=>{
     const t = e.target;
     if (!(t instanceof HTMLElement)) return;
 
@@ -230,13 +222,40 @@ function render(data){
     const payId = t.dataset.pay;
     const delId = t.dataset.del;
 
-    // PIX (exemplo)
-    if (pixId){
-      alert('PIX (exemplo)\n\nIntegração real entra aqui.');
+    // PIX
+    if (pixId) {
+      try {
+        const headers = { 'Content-Type': 'application/json' };
+        if (document.body.dataset.mode !== 'admin') {
+          const tk = localStorage.getItem('client_token');
+          if (tk) headers.Authorization = 'Bearer ' + tk;
+        }
+        const r = await fetch(`${API}/api/installments/${pixId}/pix`, { method: 'POST', headers });
+        const data = await r.json().catch(()=> ({}));
+
+        if (!r.ok) {
+          const msg =
+            data?.details?.message ||
+            data?.details?.error ||
+            data?.error ||
+            'Falha ao gerar PIX';
+          throw new Error(msg);
+        }
+
+        openPixModal({
+          installment_id: Number(pixId),
+          qr_base64: data.qr_base64,
+          qr_code: data.qr_code,
+          payment_id: data.payment_id,
+        });
+      } catch (err) {
+        console.error(err);
+        alert(err.message || 'Erro ao gerar PIX');
+      }
       return;
     }
 
-    // Baixar (somente admin)
+    // Baixar (admin)
     if (payId){
       if (document.body.dataset.mode !== 'admin') return;
       const ok = confirm('Confirmar baixa desta parcela?');
@@ -252,7 +271,7 @@ function render(data){
       return;
     }
 
-    // Excluir parcela (somente admin) — confirmação + senha
+    // Excluir (admin)
     if (delId){
       if (document.body.dataset.mode !== 'admin') return;
       const info = t.dataset.info || `Parcela ${delId}`;
@@ -261,7 +280,7 @@ function render(data){
 
       const pass = prompt('Para confirmar a exclusão, digite a senha:');
       if (pass === null) return;
-      if (pass !== '116477'){ // senha
+      if (pass !== '116477'){
         alert('Senha incorreta.');
         return;
       }
@@ -276,6 +295,77 @@ function render(data){
       }
     }
   };
+}
+
+// ===== Modal PIX (abrir, copiar, fechar e polling) =====
+let _pixPoll = null;
+function openPixModal({ installment_id, qr_base64, qr_code, payment_id, ticket_url }){
+  const modal = $('#pixModal');
+  const img   = $('#pixImg');
+  const code  = $('#pixCode');
+  const copy  = $('#copyPix');
+  const close = $('#closePix');
+  const status= $('#pixStatus');
+
+  if (!modal) return;
+
+  // conteúdo (com fallback para gerar QR a partir do 'copia e cola')
+  if (img) {
+    if (qr_base64) {
+      img.src = qr_base64;
+      img.style.display = 'inline-block';
+    } else if (qr_code) {
+      img.src = 'https://chart.googleapis.com/chart?chs=240x240&cht=qr&chl=' + encodeURIComponent(qr_code);
+      img.style.display = 'inline-block';
+    } else {
+      img.removeAttribute('src');
+      img.style.display = 'none';
+      if (ticket_url) window.open(ticket_url, '_blank');
+    }
+  }
+  if (code) code.value = qr_code || '';
+
+  // mostrar
+  modal.style.display = 'block';
+
+  // copiar
+  copy?.addEventListener('click', async () => {
+    try { await navigator.clipboard.writeText(code.value); copy.textContent = 'Copiado!'; setTimeout(()=> copy.textContent = 'Copiar', 1500); }
+    catch { alert('Não foi possível copiar.'); }
+  }, { once: true });
+
+  // fechar
+  const doClose = () => {
+    modal.style.display = 'none';
+    if (_pixPoll){ clearInterval(_pixPoll); _pixPoll = null; }
+  };
+  close?.addEventListener('click', doClose, { once: true });
+
+  // polling do status (funciona mesmo sem webhook em dev)
+  if (payment_id) {
+    if (_pixPoll) { clearInterval(_pixPoll); _pixPoll = null; }
+    _pixPoll = setInterval(async ()=>{
+      try{
+        const r = await fetch(`${API}/api/pix/${payment_id}`);
+        const data = await r.json().catch(()=> ({}));
+        if (data?.status === 'approved') {
+          if (status) status.textContent = 'Pagamento aprovado ✅';
+
+          // >>> SEM WEBHOOK: baixa a parcela imediatamente
+          if (installment_id) {
+            try {
+              await fetch(`${API}/api/installments/${installment_id}/pay`, { method: 'POST' });
+            } catch { /* silencioso */ }
+          }
+
+          // recarrega dados para refletir baixa
+          const fresh = await loadData();
+          render(fresh);
+          doClose();
+        }
+      }catch(e){ /* silencioso */ }
+    }, 5000);
+  }
 }
 
 async function boot(){

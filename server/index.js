@@ -5,6 +5,7 @@ import cors from 'cors';
 import jwt from 'jsonwebtoken';
 import bcrypt from 'bcryptjs';
 
+// ===== DB (funções existentes) =====
 import {
   // clientes / portal
   findCustomerByCPF,
@@ -31,7 +32,36 @@ import {
   // KPIs
   sumReceivedForMonth,
   sumReceivedByMonth,
+
+  // usado no PIX
+  getInstallmentWithCustomer,
 } from './db.js';
+
+// ===== Mercado Pago SDK v2 =====
+import { MercadoPagoConfig, Payment } from 'mercadopago';
+
+// --- INÍCIO: ajustes de segurança/sandbox ---
+const MP_TOKEN = process.env.MP_ACCESS_TOKEN || '';
+const NODE_ENV = process.env.NODE_ENV || 'development';
+
+// Log seguro só do prefixo (ajuda a depurar se é TEST- ou APP_USR-)
+console.log('Mercado Pago token em uso (prefixo):', MP_TOKEN.slice(0, 7) || '(vazio)');
+
+// Em ambiente não-produtivo, recusar APP_USR para evitar 401 "Unauthorized use of live credentials"
+if (NODE_ENV !== 'production' && MP_TOKEN.startsWith('APP_USR-')) {
+  console.warn(
+    '[ATENÇÃO] Você está em', NODE_ENV,
+    'mas o MP_ACCESS_TOKEN é APP_USR- (produção). Troque para TEST- no .env.'
+  );
+}
+// --- FIM: ajustes de segurança/sandbox ---
+
+const mpClient = new MercadoPagoConfig({
+  accessToken: MP_TOKEN, // deve ser TEST-... em dev
+});
+
+const mpPayment = new Payment(mpClient);
+const WEBHOOK_URL = process.env.WEBHOOK_URL || '';
 
 const app = express();
 
@@ -47,6 +77,7 @@ app.use(express.json());
 const JWT_SECRET = process.env.JWT_SECRET || 'dev-secret';
 
 // ============== Middleware: Auth do CLIENTE ==============
+// (sem alterações)
 function authClient(req, res, next) {
   const auth = req.headers.authorization || '';
   const token = auth.startsWith('Bearer ') ? auth.slice(7) : null;
@@ -65,6 +96,7 @@ function authClient(req, res, next) {
 }
 
 // ============== LOGIN ADMIN (compat + novo) ==============
+// (sem alterações)
 function adminLoginHandler(req, res) {
   try {
     const { email, password } = req.body || {};
@@ -99,6 +131,7 @@ app.post('/api/auth/login', adminLoginHandler);
 app.post('/api/login',       adminLoginHandler);
 
 // ============== LOGIN do CLIENTE por CPF ==============
+// (sem alterações)
 app.post('/api/client/login', (req, res) => {
   try {
     const { cpf } = req.body || {};
@@ -122,6 +155,7 @@ app.post('/api/client/login', (req, res) => {
 });
 
 // ============== PORTAL DO CLIENTE ==============
+// (sem alterações)
 app.get('/api/client/portal', authClient, (req, res) => {
   try {
     const data = getPortalDataByCustomerId(req.client.customerId);
@@ -134,6 +168,7 @@ app.get('/api/client/portal', authClient, (req, res) => {
 });
 
 // Admin visualiza portal por customerId
+// (sem alterações)
 app.get('/api/admin/portal/:customerId', (req, res) => {
   try {
     const id = Number(req.params.customerId);
@@ -149,6 +184,7 @@ app.get('/api/admin/portal/:customerId', (req, res) => {
 });
 
 // ============== CLIENTES ==============
+// (sem alterações)
 app.post('/api/customers', (req, res) => {
   const { name, email, phone, cpf } = req.body || {};
   if (!name || !cpf) {
@@ -177,6 +213,7 @@ app.get('/api/customers/by-cpf/:cpf', (req, res) => {
 });
 
 // ============== CONTRATOS & PARCELAS ==============
+// (sem alterações)
 app.post('/api/contracts', (req, res) => {
   try {
     const {
@@ -274,6 +311,7 @@ app.delete('/api/contracts/:id', (req, res) => {
 });
 
 // ============== KPIs (dashboard) ==============
+// (sem alterações)
 app.get('/api/kpis/recebidos-mes', (req, res) => {
   try {
     const now = new Date();
@@ -300,7 +338,7 @@ app.get('/api/kpis/monthly', (req, res) => {
 });
 
 // ============== PEDIDOS (Aprovar compras) ==============
-// Cliente cria pedido
+// (sem alterações)
 app.post('/api/orders', authClient, (req, res) => {
   try {
     const { product, amount } = req.body || {};
@@ -318,8 +356,6 @@ app.post('/api/orders', authClient, (req, res) => {
     res.status(500).json({ error: 'internal' });
   }
 });
-
-// Admin lista pedidos (padrão: pendente)
 app.get('/api/orders', (req, res) => {
   try {
     const status = req.query.status || 'pendente'; // pendente | aprovado | recusado
@@ -329,8 +365,6 @@ app.get('/api/orders', (req, res) => {
     res.status(500).json({ error: 'internal' });
   }
 });
-
-// *** Compatibilidade: sua UI chama /api/orders/pending ***
 app.get('/api/orders/pending', (_req, res) => {
   try {
     res.json(listOrderRequests('pendente'));
@@ -339,8 +373,6 @@ app.get('/api/orders/pending', (_req, res) => {
     res.status(500).json({ error: 'internal' });
   }
 });
-
-// Admin aprova/recusa (grava decisão e nota opcional)
 app.post('/api/orders/:id/approve', (req, res) => {
   try {
     const id = Number(req.params.id);
@@ -359,8 +391,6 @@ app.post('/api/orders/:id/reject', (req, res) => {
     res.json({ ok: true });
   } catch (e) { console.error(e); res.status(500).json({ error: 'internal' }); }
 });
-
-// (opcional) Admin remove um pedido
 app.delete('/api/orders/:id', (req, res) => {
   try {
     const id = Number(req.params.id);
@@ -369,12 +399,130 @@ app.delete('/api/orders/:id', (req, res) => {
     res.json({ ok: true });
   } catch (e) { console.error(e); res.status(500).json({ error: 'internal' }); }
 });
-
-// Cliente vê os pedidos dele (para aviso no portal)
 app.get('/api/client/orders', authClient, (req, res) => {
   try {
     res.json(listOrderRequestsByCustomer(req.client.customerId));
   } catch (e) { console.error(e); res.status(500).json({ error: 'internal' }); }
+});
+
+
+// ============== PIX (Mercado Pago) ==============
+app.post('/api/installments/:id/pix', async (req, res) => {
+  try {
+    // 1) validação de credencial
+    if (!MP_TOKEN) {
+      return res.status(500).json({ error: 'MP_ACCESS_TOKEN não configurado (.env)' });
+    }
+    if (NODE_ENV !== 'production' && MP_TOKEN.startsWith('APP_USR-')) {
+      return res.status(400).json({ error: 'Em desenvolvimento use um token TEST- do Mercado Pago (sandbox).' });
+    }
+
+    const id = Number(req.params.id);
+    if (!id) return res.status(400).json({ error: 'id inválido' });
+
+    // 2) carrega parcela + cliente
+    const it = getInstallmentWithCustomer(id);
+    if (!it) return res.status(404).json({ error: 'Parcela não encontrada' });
+    if (String(it.status || '').toLowerCase() === 'pago') {
+      return res.status(409).json({ error: 'Parcela já paga' });
+    }
+
+    const transaction_amount = Number(it.value || it.valor || 0);
+    if (!transaction_amount || isNaN(transaction_amount)) {
+      return res.status(400).json({ error: 'Valor da parcela inválido' });
+    }
+
+    const description = `Parcela #${id} — ${it.customer_name || it.name || 'Cliente'}`;
+
+    // Em DEV use sempre CPF de teste aceito pelo MP (evita rejeições bestas)
+    const cpfDev = '19119119100';
+    const cpfReal = String(it.cpf || '').replace(/\D/g,'').padEnd(11,'0').slice(0,11);
+
+    const payer = {
+      first_name: (it.customer_name || it.name || '').split(' ')[0] || 'Cliente',
+      email: it.email || 'comprador_teste@example.com',
+      identification: {
+        type: 'CPF',
+        number: NODE_ENV !== 'production' ? cpfDev : cpfReal
+      }
+    };
+
+    const body = {
+      transaction_amount,
+      description,
+      payment_method_id: 'pix',
+      payer,
+      metadata: { installment_id: id, customer_id: it.customer_id },
+      notification_url: WEBHOOK_URL || undefined, // vazio em dev
+    };
+
+    const p = await mpPayment.create({ body });
+
+    const trx = p?.point_of_interaction?.transaction_data || {};
+    return res.status(201).json({
+      payment_id: p?.id,
+      status: p?.status,
+      status_detail: p?.status_detail,
+      qr_code: trx.qr_code,
+      qr_base64: trx.qr_code_base64 ? `data:image/png;base64,${trx.qr_code_base64}` : null,
+      ticket_url: trx.ticket_url || null,
+    });
+
+  } catch (e) {
+    // Em dev, devolve detalhes para ver o motivo real (401, 400, etc)
+    const details =
+      e?.response?.data || e?.response || e?.message || e || 'unknown';
+    console.error('PIX create error:', details);
+
+    if (NODE_ENV !== 'production') {
+      return res.status(500).json({ error: 'Falha ao gerar PIX', details });
+    }
+    return res.status(500).json({ error: 'Falha ao gerar PIX' });
+  }
+});
+
+// >>> NOVO: endpoint de status (usado pelo front para polling)
+app.get('/api/pix/:paymentId', async (req, res) => {
+  try {
+    const paymentId = req.params.paymentId;
+    const p = await mpPayment.get({ id: paymentId }); // SDK v2
+    return res.json({
+      id: p?.id,
+      status: p?.status,
+      status_detail: p?.status_detail,
+      metadata: p?.metadata || {},
+    });
+  } catch (e) {
+    console.error('PIX status error:', e?.response || e);
+    return res.status(500).json({ error: 'Falha ao consultar status' });
+  }
+});
+
+// webhook (quando publicar!)
+app.post('/api/pix/webhook', express.json({ type: '*/*' }), async (req, res) => {
+  try {
+    let paymentId = null;
+
+    if (req.body?.data?.id) paymentId = req.body.data.id;
+    if (!paymentId && req.query?.id && req.query?.topic === 'payment') paymentId = req.query.id;
+
+    if (!paymentId) { res.status(200).send('ok'); return; }
+
+    const p = await mpPayment.get({ id: paymentId }); // SDK v2
+
+    if (p?.status === 'approved' && p?.metadata?.installment_id) {
+      try {
+        markInstallmentPaid(Number(p.metadata.installment_id));
+      } catch (err) {
+        console.error('Erro ao marcar parcela paga via webhook:', err);
+      }
+    }
+
+    res.status(200).send('ok');
+  } catch (e) {
+    console.error('Webhook error:', e?.response || e);
+    res.status(200).send('ok'); // responda 200 para o MP não re-tentar sem fim
+  }
 });
 
 // ============== Healthcheck & listen ==============
