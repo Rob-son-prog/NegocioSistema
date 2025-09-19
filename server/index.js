@@ -73,11 +73,28 @@ const WEBHOOK_URL = process.env.WEBHOOK_URL || '';
 
 const app = express();
 
-// CORS – libera o front no 127/localhost:5500 (Live Server)
+/* ===================== CORS =====================
+
+   Libera:
+   - Live Server local (127 e localhost:5500) para desenvolvimento
+   - Domínio do Render para produção
+
+   Obs.: incluí a checagem que permite requests SEM "Origin"
+   (ex.: /health chamado por monitoramento), para não bloquear.
+*/
+const ALLOWED_ORIGINS = [
+  'http://127.0.0.1:5500',
+  'http://localhost:5500',
+  'https://negociosistema.onrender.com', // <- seu domínio no Render
+];
+
 app.use(cors({
-  origin: ['http://127.0.0.1:5500', 'http://localhost:5500'],
+  origin: (origin, cb) => {
+    if (!origin) return cb(null, true); // permite calls sem Origin (healthchecks/curl)
+    return cb(null, ALLOWED_ORIGINS.includes(origin));
+  },
   methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization', 'X-Delete-Code'], // <—
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Delete-Code'],
 }));
 
 // servir arquivos estáticos do front (index.html, style.css, *.js)
@@ -90,7 +107,6 @@ app.get('/', (_req, res) => {
 
 // opcional: healthcheck
 app.get('/health', (_req, res) => res.send('ok'));
-
 
 app.options('*', cors());
 app.use(express.json());
@@ -198,7 +214,6 @@ app.get('/api/admin/portal/:customerId', (req, res) => {
 });
 
 // ============== CLIENTES ==============
-// criar cliente (cadastro.html)
 app.post('/api/customers', (req, res) => {
   const { name, email, phone, cpf } = req.body || {};
   if (!name || !cpf) {
@@ -206,7 +221,6 @@ app.post('/api/customers', (req, res) => {
   }
 
   try {
-    // createCustomer aceita também campos de endereço, se vierem
     const info = createCustomer(req.body);
     return res.status(201).json({
       id: info.lastInsertRowid,
@@ -221,7 +235,6 @@ app.post('/api/customers', (req, res) => {
   }
 });
 
-// buscar cliente por CPF (checar duplicidade)
 app.get('/api/customers/by-cpf/:cpf', (req, res) => {
   const cpf = (req.params.cpf || '').replace(/\D/g, '');
   const cli = findCustomerByCPF(cpf);
@@ -229,7 +242,6 @@ app.get('/api/customers/by-cpf/:cpf', (req, res) => {
   res.json(cli);
 });
 
-// listar clientes (com busca/paginação simples)
 app.get('/api/customers', (req, res) => {
   try {
     const { search = '', limit = 100, offset = 0 } = req.query;
@@ -241,14 +253,12 @@ app.get('/api/customers', (req, res) => {
   }
 });
 
-// obter 1 cliente por ID
 app.get('/api/customers/:id', (req, res) => {
   const row = getCustomerById(req.params.id);
   if (!row) return res.status(404).json({ error: 'Cliente não encontrado' });
   res.json(row);
 });
 
-// atualizar cliente (edição)
 app.put('/api/customers/:id', (req, res) => {
   try {
     const r = updateCustomer(req.params.id, req.body);
@@ -259,7 +269,6 @@ app.put('/api/customers/:id', (req, res) => {
   }
 });
 
-// excluir cliente (se você tiver botão para isso em outra tela)
 app.delete('/api/customers/:id', (req, res) => {
   try {
     const id = Number(req.params.id);
@@ -368,15 +377,12 @@ app.delete('/api/contracts/:id', (req, res) => {
     const id = Number(req.params.id);
     if (!id) return res.status(400).json({ error: 'id inválido' });
 
-    // código exigido (vem do .env — fallback 116477)
     const required = process.env.DELETE_CODE || '116477';
-    // aceita via header, query ou body
     const provided =
       req.headers['x-delete-code'] ||
       req.query.code ||
       (req.body && req.body.code);
 
-    // log opcional pra depurar
     console.log('[DELETE /contracts]', { id, provided });
 
     if (!provided || String(provided) !== String(required)) {
@@ -559,7 +565,6 @@ app.post('/api/installments/:id/pix', async (req, res) => {
   }
 });
 
-// status de pagamento PIX
 app.get('/api/pix/:paymentId', async (req, res) => {
   try {
     const paymentId = req.params.paymentId;
@@ -576,7 +581,6 @@ app.get('/api/pix/:paymentId', async (req, res) => {
   }
 });
 
-// webhook (quando publicar!)
 app.post('/api/pix/webhook', express.json({ type: '*/*' }), async (req, res) => {
   try {
     let paymentId = null;
