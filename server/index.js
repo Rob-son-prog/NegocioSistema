@@ -1,3 +1,10 @@
+// no topo do arquivo
+import path from 'path';
+import { fileURLToPath } from 'url';
+const __filename = fileURLToPath(import.meta.url);
+const __dirname  = path.dirname(__filename);
+const PUBLIC_DIR = path.resolve(__dirname, '..'); // aponta para a raiz onde estão index.html, style.css, etc.
+
 // server/index.js
 import 'dotenv/config';
 import express from 'express';
@@ -72,6 +79,18 @@ app.use(cors({
   methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization', 'X-Delete-Code'], // <—
 }));
+
+// servir arquivos estáticos do front (index.html, style.css, *.js)
+app.use(express.static(PUBLIC_DIR));
+
+// rota raiz entrega o index.html
+app.get('/', (_req, res) => {
+  res.sendFile(path.join(PUBLIC_DIR, 'index.html'));
+});
+
+// opcional: healthcheck
+app.get('/health', (_req, res) => res.send('ok'));
+
 
 app.options('*', cors());
 app.use(express.json());
