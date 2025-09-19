@@ -14,12 +14,12 @@
       <form id="login-form">
         <div class="input-group">
           <span class="icon" aria-hidden="true">👤</span>
-          <input type="email" id="email" placeholder="Email" required />
+          <input type="email" id="email" placeholder="Email" required autocomplete="email" />
         </div>
 
         <div class="input-group">
           <span class="icon" aria-hidden="true">🔒</span>
-          <input type="password" id="password" placeholder="Senha" required />
+          <input type="password" id="password" placeholder="Senha" required autocomplete="current-password" />
         </div>
 
         <div class="row">
@@ -39,10 +39,10 @@
   </div>
 
   <!-- SEMPRE primeiro -->
-<script src="config.js?v=2"></script>
+  <script src="config.js?v=2"></script>
 
-<!-- depois, o script de login novo -->
-<script src="auth.js?v=2"></script>
+  <!-- depois, o script de login -->
+  <script src="public/auth.js?v=2"></script>
 
 </body>
 </html>
