@@ -1,12 +1,11 @@
 // config.js
 (function () {
-  // Se estiver no Render, usa o mesmo domínio (https://seusite.onrender.com)
+  // Em produção (Render) usa o próprio domínio; em dev usa localhost:4000
   const IS_RENDER = /\.onrender\.com$/i.test(location.hostname);
   const API_URL   = IS_RENDER ? location.origin : 'http://127.0.0.1:4000';
 
-  // Para o portal do cliente usamos o token "client_token".
-  // (No admin, mude TOKEN_KEY para "admin_token" se precisar)
-  const TOKEN_KEY = 'client_token';
+  // Para o ADMIN:
+  const TOKEN_KEY = 'admin_token';
 
   window.APP_CONFIG = {
     API_URL,
