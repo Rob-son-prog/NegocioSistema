@@ -1,10 +1,10 @@
 <!DOCTYPE html>
 <html lang="pt">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Sistema meu negocio</title>
-    <link rel="stylesheet" href="style.css">    
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Sistema meu negocio</title>
+  <link rel="stylesheet" href="style.css"/>
 </head>
 <body>
   <div class="scene">
@@ -37,13 +37,10 @@
       </form>
     </div>
   </div>
-  <!-- use caminho relativo -->    
- <script src="script.js?v=11"></script>
 
+  <!-- 1) sempre primeiro: define window.APP_CONFIG -->
+  <script src="config.js?v=1"></script>
+  <!-- 2) depois: script de login que usa APP_CONFIG -->
+  <script src="auth.js?v=1"></script>
 </body>
-
-
-
-
-
 </html>

@@ -1,44 +1,24 @@
-// server/auth.js
-const jwt = require('jsonwebtoken');             // << aqui estava escrito errado
-const SECRET = process.env.JWT_SECRET || 'dev-secret';
-
-// middleware: valida Bearer <token>
-function auth(req, res, next) {
-  const h = req.headers.authorization || '';
-  const [, token] = h.split(' ');
-  if (!token) return res.status(401).json({ error: 'missing token' });
-  try {
-    req.user = jwt.verify(token, SECRET);
-    next();
-  } catch (e) {
-    return res.status(401).json({ error: 'invalid token' });
-  }
-}
-
-// exige papel admin
-function requireAdmin(req, res, next) {
-  if (!req.user || req.user.role !== 'admin') {
-    return res.status(403).json({ error: 'forbidden' });
-  }
-  next();
-}
-
-module.exports = { auth, requireAdmin, SECRET }; // << garanta "exports"
-
-// auth.js
+// public/auth.js
 (function () {
-  const API = 'http://127.0.0.1:4000';
-  const LOGIN_PATHS = ['/api/auth/login', '/api/login']; // nova e antiga (compat)
+  // Lê do config.js; se faltar, infere pelo ambiente
+  const CFG = window.APP_CONFIG || {};
+  const API =
+    CFG.API_URL ||
+    (location.hostname.endsWith('.onrender.com') ? '' : 'http://127.0.0.1:4000');
 
+  // Compatibilidade: tenta as duas rotas de login do backend
+  const LOGIN_PATHS = ['/api/auth/login', '/api/login'];
+
+  // Helpers de DOM
   const $ = (s) => document.querySelector(s);
 
-  // tente achar campos por id; ajuste se seus ids forem diferentes
-  const form = $('form') || document;
+  // Elementos do formulário (tente achar pelos ids comuns, com fallback)
+  const form    = $('form') || document;
   const emailEl = $('#email') || $('input[type="email"]');
   const passEl  = $('#password') || $('input[type="password"]');
   const btn     = $('button[type="submit"]');
 
-  // área de mensagens
+  // Área de mensagens (cria se não existir)
   let out = $('#out');
   if (!out) {
     out = document.createElement('p');
@@ -47,19 +27,20 @@ module.exports = { auth, requireAdmin, SECRET }; // << garanta "exports"
     form.appendChild(out);
   }
 
+  // Request JSON seguro (evita erro de parse quando o servidor devolve HTML)
   async function postJSON(url, body) {
-    const res = await fetch(url, {
+    const res  = await fetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
     });
 
-    const contentType = res.headers.get('content-type') || '';
+    const ct   = res.headers.get('content-type') || '';
     const text = await res.text();
 
-    // Se o servidor devolveu HTML (ex.: 404 do Live Server), evita o "Unexpected token '<'"
-    if (!contentType.includes('application/json')) {
-      throw new Error(`Servidor retornou ${res.status} ${res.statusText} (conteúdo HTML). Verifique a URL do endpoint.`);
+    if (!ct.includes('application/json')) {
+      // Ex.: 404 do servidor (HTML), CORS, etc.
+      throw new Error(`Servidor retornou ${res.status} ${res.statusText}. Verifique a URL da API.`);
     }
 
     const data = JSON.parse(text);
@@ -67,30 +48,38 @@ module.exports = { auth, requireAdmin, SECRET }; // << garanta "exports"
     return data; // { token, user }
   }
 
+  // Tenta logar em /api/auth/login e /api/login (compat)
   async function doLogin(email, password) {
+    if (!API && API !== '') throw new Error('API_URL não configurado (config.js).');
+
     let lastErr = null;
-    for (const p of LOGIN_PATHS) {
+    for (const path of LOGIN_PATHS) {
       try {
-        return await postJSON(API + p, { email: email.trim(), password });
+        const base = API === '' ? '' : API; // '' => mesma origem no Render
+        return await postJSON(`${base}${path}`, { email: email.trim(), password });
       } catch (e) {
-        lastErr = e; // tenta próxima rota
+        lastErr = e; // tenta próxima
       }
     }
     throw lastErr || new Error('Não foi possível encontrar a rota de login da API.');
   }
 
+  // Submit do formulário
   form.addEventListener('submit', async (ev) => {
-    if (ev) ev.preventDefault();
+    ev?.preventDefault();
     out.textContent = '';
     if (btn) btn.disabled = true;
 
     try {
       const email = (emailEl?.value || '').trim();
       const password = passEl?.value || '';
+
       if (!email || !password) throw new Error('Informe e-mail e senha.');
 
       const data = await doLogin(email, password);
+      // Salva o token do ADMIN
       localStorage.setItem('admin_token', data.token);
+      // Vai para o dashboard do admin
       location.href = 'dashboard.html';
     } catch (err) {
       out.textContent = err.message || 'Erro ao conectar';
@@ -99,29 +88,7 @@ module.exports = { auth, requireAdmin, SECRET }; // << garanta "exports"
       if (btn) btn.disabled = false;
     }
   });
+
+  // (Opcional) Log simples para confirmar base usada
+  // console.log('[auth.js] API base =', API || '(mesma origem)');
 })();
-
-// server/auth.js (ESM)
-import jwt from 'jsonwebtoken';
-
-const JWT_SECRET = process.env.JWT_SECRET || 'dev-secret';
-
-export function auth(req, res, next) {
-  const h = req.headers.authorization || '';
-  const token = h.startsWith('Bearer ') ? h.slice(7) : null;
-  if (!token) return res.status(401).json({ error: 'missing token' });
-
-  try {
-    req.user = jwt.verify(token, JWT_SECRET);
-    next();
-  } catch {
-    return res.status(401).json({ error: 'invalid token' });
-  }
-}
-
-export function requireAdmin(req, res, next) {
-  if (!req.user || req.user.role !== 'admin') {
-    return res.status(403).json({ error: 'forbidden' });
-  }
-  next();
-}
