@@ -88,13 +88,21 @@ const ALLOWED_ORIGINS = [
   'https://negociosistema.onrender.com', // <- seu domínio no Render
 ];
 
+const allowedOrigins = [
+  'http://127.0.0.1:5500',
+  'http://localhost:5500',
+  'http://localhost:4000',
+  'https://negociosistema.onrender.com',
+];
+
 app.use(cors({
-  origin: (origin, cb) => {
-    if (!origin) return cb(null, true); // permite calls sem Origin (healthchecks/curl)
-    return cb(null, ALLOWED_ORIGINS.includes(origin));
+  origin(origin, cb) {
+    if (!origin || allowedOrigins.includes(origin)) return cb(null, true);
+    return cb(null, false);
   },
   methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization', 'X-Delete-Code'],
+  credentials: true,
 }));
 
 // servir arquivos estáticos do front (index.html, style.css, *.js)
