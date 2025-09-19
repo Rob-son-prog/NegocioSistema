@@ -4,6 +4,7 @@ import { fileURLToPath } from 'url';
 import path from 'path';
 import bcrypt from 'bcryptjs';
 
+
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const dbPath = path.join(__dirname, 'data', 'data.sqlite');
 const db = new Database(dbPath);
@@ -23,7 +24,7 @@ CREATE TABLE IF NOT EXISTS contracts (
   id          INTEGER PRIMARY KEY AUTOINCREMENT,
   customer_id INTEGER NOT NULL REFERENCES customers(id) ON DELETE CASCADE,
   total       REAL NOT NULL,
-  tipo        TEXT NOT NULL DEFAULT 'negocio', -- negocio | venda
+  tipo        TEXT NOT NULL DEFAULT 'negocio', -- negocio | venda | servico
   created_at  TEXT DEFAULT (datetime('now'))
 );
 
@@ -58,6 +59,19 @@ CREATE TABLE IF NOT EXISTS users (
 );
 `);
 
+// ---------- MIGRATION segura: adiciona colunas de endereço se faltarem ----------
+function ensureCustomerAddressColumns() {
+  const cols = new Set(
+    db.prepare(`PRAGMA table_info(customers)`).all().map(r => r.name)
+  );
+  const maybeAdd = (col) => {
+    if (!cols.has(col)) db.exec(`ALTER TABLE customers ADD COLUMN ${col} TEXT`);
+  };
+  ['cep', 'logradouro', 'numero', 'complemento', 'bairro', 'cidade', 'uf']
+    .forEach(maybeAdd);
+}
+ensureCustomerAddressColumns();
+
 // ---------- helpers ----------
 const onlyDigits = (s) => String(s || '').replace(/\D/g, '');
 function normalizeCpf(cpf) {
@@ -76,19 +90,85 @@ const ENV_ADMIN = {
 };
 
 // ---------- clientes ----------
-function createCustomer({ name, email = null, phone = null, cpf }) {
+function createCustomer({
+  name,
+  email = null,
+  phone = null,
+  cpf,
+
+  // endereço (opcionais)
+  cep = null,
+  logradouro = null,
+  numero = null,
+  complemento = null,
+  bairro = null,
+  cidade = null,
+  uf = null,
+}) {
   const cpfDigits = onlyDigits(cpf);
+
   const stmt = db.prepare(`
-    INSERT INTO customers (name, email, phone, cpf)
-    VALUES (?, ?, ?, ?)
+    INSERT INTO customers (
+      name, email, phone, cpf,
+      cep, logradouro, numero, complemento, bairro, cidade, uf
+    )
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `);
-  return stmt.run(name, email, phone, cpfDigits);
+
+  return stmt.run(
+    name, email, phone, cpfDigits,
+    cep, logradouro, numero, complemento, bairro, cidade, uf
+  );
 }
 
 function findCustomerByCPF(cpf) {
   const cpfDigits = onlyDigits(cpf);
   const row = db.prepare(`SELECT * FROM customers WHERE cpf = ?`).get(cpfDigits);
   return row || null;
+}
+
+// NOVOS: listagem / leitura / atualização / exclusão
+function listCustomers({ search = '', limit = 100, offset = 0 } = {}) {
+  limit = Math.max(1, Math.min(Number(limit) || 100, 500));
+  offset = Math.max(0, Number(offset) || 0);
+
+  if (search) {
+    const q = `%${String(search).toLowerCase()}%`;
+    return db.prepare(`
+      SELECT * FROM customers
+      WHERE lower(name) LIKE ? OR lower(email) LIKE ? OR cpf LIKE ?
+      ORDER BY id DESC
+      LIMIT ? OFFSET ?
+    `).all(q, q, search.replace(/\D/g, ''), limit, offset);
+  }
+  return db.prepare(`
+    SELECT * FROM customers
+    ORDER BY id DESC
+    LIMIT ? OFFSET ?
+  `).all(limit, offset);
+}
+
+function getCustomerById(id) {
+  return db.prepare(`SELECT * FROM customers WHERE id = ?`).get(Number(id)) || null;
+}
+
+function updateCustomer(id, fields = {}) {
+  const allowed = ['name','email','phone','cep','logradouro','numero','complemento','bairro','cidade','uf'];
+  const sets = [], args = [];
+  for (const k of allowed) {
+    if (fields[k] !== undefined) {
+      sets.push(`${k} = ?`);
+      args.push(fields[k] === '' ? null : String(fields[k]));
+    }
+  }
+  if (!sets.length) return { changes: 0 };
+  args.push(Number(id));
+  const sql = `UPDATE customers SET ${sets.join(', ')} WHERE id = ?`;
+  return db.prepare(sql).run(...args);
+}
+
+function deleteCustomer(id) {
+  return db.prepare(`DELETE FROM customers WHERE id = ?`).run(Number(id));
 }
 
 // ---------- portal do cliente ----------
@@ -110,7 +190,6 @@ function getPortalDataByCustomerId(customerId) {
     WHERE c.customer_id = ?
     ORDER BY date(i.due) ASC, i.id ASC
   `).all(customerId)
-   // compatibilidade com o front (value/valor, due/venc)
    .map(i => ({
       id: i.id,
       contract_id: i.contract_id,
@@ -186,7 +265,6 @@ function markInstallmentPaid(id) {
 }
 
 function updateInstallment({ id, value, due, status }) {
-  // constrói dinamicamente os campos enviados
   const sets = [];
   const args = [];
   if (value !== undefined) { sets.push('value = ?'); args.push(Number(value)); }
@@ -307,6 +385,12 @@ export {
   createCustomer,
   findCustomerByCPF,
   getPortalDataByCustomerId,
+
+  // NOVOS para página de edição/lista
+  listCustomers,
+  getCustomerById,
+  updateCustomer,
+  deleteCustomer,
 
   // auth admin
   findUserByEmail,

@@ -5,7 +5,7 @@ import cors from 'cors';
 import jwt from 'jsonwebtoken';
 import bcrypt from 'bcryptjs';
 
-// ===== DB (funções existentes) =====
+// ===== DB (funções) =====
 import {
   // clientes / portal
   findCustomerByCPF,
@@ -13,6 +13,12 @@ import {
   findUserByEmail,
   createCustomer,
   normalizeCpf,
+
+  // novas rotas de listagem/edição/exclusão de clientes
+  listCustomers,
+  getCustomerById,
+  updateCustomer,
+  deleteCustomer,
 
   // contratos / parcelas
   createContractAndInstallments,
@@ -33,7 +39,7 @@ import {
   sumReceivedForMonth,
   sumReceivedByMonth,
 
-  // usado no PIX
+  // PIX helper
   getInstallmentWithCustomer,
 } from './db.js';
 
@@ -44,10 +50,8 @@ import { MercadoPagoConfig, Payment } from 'mercadopago';
 const MP_TOKEN = process.env.MP_ACCESS_TOKEN || '';
 const NODE_ENV = process.env.NODE_ENV || 'development';
 
-// Log seguro só do prefixo (ajuda a depurar se é TEST- ou APP_USR-)
 console.log('Mercado Pago token em uso (prefixo):', MP_TOKEN.slice(0, 7) || '(vazio)');
 
-// Em ambiente não-produtivo, recusar APP_USR para evitar 401 "Unauthorized use of live credentials"
 if (NODE_ENV !== 'production' && MP_TOKEN.startsWith('APP_USR-')) {
   console.warn(
     '[ATENÇÃO] Você está em', NODE_ENV,
@@ -56,10 +60,7 @@ if (NODE_ENV !== 'production' && MP_TOKEN.startsWith('APP_USR-')) {
 }
 // --- FIM: ajustes de segurança/sandbox ---
 
-const mpClient = new MercadoPagoConfig({
-  accessToken: MP_TOKEN, // deve ser TEST-... em dev
-});
-
+const mpClient = new MercadoPagoConfig({ accessToken: MP_TOKEN });
 const mpPayment = new Payment(mpClient);
 const WEBHOOK_URL = process.env.WEBHOOK_URL || '';
 
@@ -68,16 +69,16 @@ const app = express();
 // CORS – libera o front no 127/localhost:5500 (Live Server)
 app.use(cors({
   origin: ['http://127.0.0.1:5500', 'http://localhost:5500'],
-  methods: ['GET', 'POST', 'PATCH', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization'],
+  methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Delete-Code'], // <—
 }));
+
 app.options('*', cors());
 app.use(express.json());
 
 const JWT_SECRET = process.env.JWT_SECRET || 'dev-secret';
 
 // ============== Middleware: Auth do CLIENTE ==============
-// (sem alterações)
 function authClient(req, res, next) {
   const auth = req.headers.authorization || '';
   const token = auth.startsWith('Bearer ') ? auth.slice(7) : null;
@@ -96,7 +97,6 @@ function authClient(req, res, next) {
 }
 
 // ============== LOGIN ADMIN (compat + novo) ==============
-// (sem alterações)
 function adminLoginHandler(req, res) {
   try {
     const { email, password } = req.body || {};
@@ -125,13 +125,10 @@ function adminLoginHandler(req, res) {
     res.status(500).json({ error: 'internal' });
   }
 }
-
-// rotas admin (compat)
 app.post('/api/auth/login', adminLoginHandler);
 app.post('/api/login',       adminLoginHandler);
 
 // ============== LOGIN do CLIENTE por CPF ==============
-// (sem alterações)
 app.post('/api/client/login', (req, res) => {
   try {
     const { cpf } = req.body || {};
@@ -155,7 +152,6 @@ app.post('/api/client/login', (req, res) => {
 });
 
 // ============== PORTAL DO CLIENTE ==============
-// (sem alterações)
 app.get('/api/client/portal', authClient, (req, res) => {
   try {
     const data = getPortalDataByCustomerId(req.client.customerId);
@@ -168,7 +164,6 @@ app.get('/api/client/portal', authClient, (req, res) => {
 });
 
 // Admin visualiza portal por customerId
-// (sem alterações)
 app.get('/api/admin/portal/:customerId', (req, res) => {
   try {
     const id = Number(req.params.customerId);
@@ -184,7 +179,7 @@ app.get('/api/admin/portal/:customerId', (req, res) => {
 });
 
 // ============== CLIENTES ==============
-// (sem alterações)
+// criar cliente (cadastro.html)
 app.post('/api/customers', (req, res) => {
   const { name, email, phone, cpf } = req.body || {};
   if (!name || !cpf) {
@@ -192,7 +187,8 @@ app.post('/api/customers', (req, res) => {
   }
 
   try {
-    const info = createCustomer({ name, email, phone, cpf });
+    // createCustomer aceita também campos de endereço, se vierem
+    const info = createCustomer(req.body);
     return res.status(201).json({
       id: info.lastInsertRowid,
       cpf: normalizeCpf(cpf),
@@ -205,6 +201,8 @@ app.post('/api/customers', (req, res) => {
     return res.status(500).json({ error: 'Erro ao salvar cliente' });
   }
 });
+
+// buscar cliente por CPF (checar duplicidade)
 app.get('/api/customers/by-cpf/:cpf', (req, res) => {
   const cpf = (req.params.cpf || '').replace(/\D/g, '');
   const cli = findCustomerByCPF(cpf);
@@ -212,8 +210,50 @@ app.get('/api/customers/by-cpf/:cpf', (req, res) => {
   res.json(cli);
 });
 
+// listar clientes (com busca/paginação simples)
+app.get('/api/customers', (req, res) => {
+  try {
+    const { search = '', limit = 100, offset = 0 } = req.query;
+    const rows = listCustomers({ search, limit, offset });
+    res.json(rows);
+  } catch (e) {
+    console.error(e);
+    res.status(400).json({ error: e.message || 'Falha ao listar clientes' });
+  }
+});
+
+// obter 1 cliente por ID
+app.get('/api/customers/:id', (req, res) => {
+  const row = getCustomerById(req.params.id);
+  if (!row) return res.status(404).json({ error: 'Cliente não encontrado' });
+  res.json(row);
+});
+
+// atualizar cliente (edição)
+app.put('/api/customers/:id', (req, res) => {
+  try {
+    const r = updateCustomer(req.params.id, req.body);
+    res.json({ changes: r.changes });
+  } catch (e) {
+    console.error(e);
+    res.status(400).json({ error: e.message || 'Falha ao atualizar cliente' });
+  }
+});
+
+// excluir cliente (se você tiver botão para isso em outra tela)
+app.delete('/api/customers/:id', (req, res) => {
+  try {
+    const id = Number(req.params.id);
+    if (!id) return res.status(400).json({ error: 'id inválido' });
+    const info = deleteCustomer(id);
+    res.json({ ok: true, changes: info?.changes ?? 0 });
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: 'internal' });
+  }
+});
+
 // ============== CONTRATOS & PARCELAS ==============
-// (sem alterações)
 app.post('/api/contracts', (req, res) => {
   try {
     const {
@@ -254,6 +294,7 @@ app.post('/api/contracts', (req, res) => {
     res.status(500).json({ error: 'internal' });
   }
 });
+
 app.get('/api/contracts/recent', (req, res) => {
   try {
     const limit = Math.min(Number(req.query.limit) || 25, 100);
@@ -263,6 +304,7 @@ app.get('/api/contracts/recent', (req, res) => {
     res.status(500).json({ error: 'internal' });
   }
 });
+
 app.post('/api/installments/:id/pay', (req, res) => {
   try {
     const id = Number(req.params.id);
@@ -274,6 +316,7 @@ app.post('/api/installments/:id/pay', (req, res) => {
     res.status(500).json({ error: 'internal' });
   }
 });
+
 app.patch('/api/installments/:id', (req, res) => {
   try {
     const id = Number(req.params.id);
@@ -287,6 +330,7 @@ app.patch('/api/installments/:id', (req, res) => {
     res.status(500).json({ error: 'internal' });
   }
 });
+
 app.delete('/api/installments/:id', (req, res) => {
   try {
     const id = Number(req.params.id);
@@ -298,10 +342,28 @@ app.delete('/api/installments/:id', (req, res) => {
     res.status(500).json({ error: 'internal' });
   }
 });
+
+// excluir contrato (exige código 116477 via header X-Delete-Code)
 app.delete('/api/contracts/:id', (req, res) => {
   try {
     const id = Number(req.params.id);
     if (!id) return res.status(400).json({ error: 'id inválido' });
+
+    // código exigido (vem do .env — fallback 116477)
+    const required = process.env.DELETE_CODE || '116477';
+    // aceita via header, query ou body
+    const provided =
+      req.headers['x-delete-code'] ||
+      req.query.code ||
+      (req.body && req.body.code);
+
+    // log opcional pra depurar
+    console.log('[DELETE /contracts]', { id, provided });
+
+    if (!provided || String(provided) !== String(required)) {
+      return res.status(403).json({ error: 'Código de exclusão inválido' });
+    }
+
     deleteContract(id);
     res.json({ ok: true });
   } catch (e) {
@@ -311,7 +373,6 @@ app.delete('/api/contracts/:id', (req, res) => {
 });
 
 // ============== KPIs (dashboard) ==============
-// (sem alterações)
 app.get('/api/kpis/recebidos-mes', (req, res) => {
   try {
     const now = new Date();
@@ -324,6 +385,7 @@ app.get('/api/kpis/recebidos-mes', (req, res) => {
     res.status(500).json({ error: 'internal' });
   }
 });
+
 app.get('/api/kpis/monthly', (req, res) => {
   try {
     const now = new Date();
@@ -338,7 +400,6 @@ app.get('/api/kpis/monthly', (req, res) => {
 });
 
 // ============== PEDIDOS (Aprovar compras) ==============
-// (sem alterações)
 app.post('/api/orders', authClient, (req, res) => {
   try {
     const { product, amount } = req.body || {};
@@ -356,15 +417,17 @@ app.post('/api/orders', authClient, (req, res) => {
     res.status(500).json({ error: 'internal' });
   }
 });
+
 app.get('/api/orders', (req, res) => {
   try {
-    const status = req.query.status || 'pendente'; // pendente | aprovado | recusado
+    const status = req.query.status || 'pendente';
     res.json(listOrderRequests(status));
   } catch (e) {
     console.error(e);
     res.status(500).json({ error: 'internal' });
   }
 });
+
 app.get('/api/orders/pending', (_req, res) => {
   try {
     res.json(listOrderRequests('pendente'));
@@ -373,6 +436,7 @@ app.get('/api/orders/pending', (_req, res) => {
     res.status(500).json({ error: 'internal' });
   }
 });
+
 app.post('/api/orders/:id/approve', (req, res) => {
   try {
     const id = Number(req.params.id);
@@ -382,6 +446,7 @@ app.post('/api/orders/:id/approve', (req, res) => {
     res.json({ ok: true });
   } catch (e) { console.error(e); res.status(500).json({ error: 'internal' }); }
 });
+
 app.post('/api/orders/:id/reject', (req, res) => {
   try {
     const id = Number(req.params.id);
@@ -391,6 +456,7 @@ app.post('/api/orders/:id/reject', (req, res) => {
     res.json({ ok: true });
   } catch (e) { console.error(e); res.status(500).json({ error: 'internal' }); }
 });
+
 app.delete('/api/orders/:id', (req, res) => {
   try {
     const id = Number(req.params.id);
@@ -399,17 +465,16 @@ app.delete('/api/orders/:id', (req, res) => {
     res.json({ ok: true });
   } catch (e) { console.error(e); res.status(500).json({ error: 'internal' }); }
 });
+
 app.get('/api/client/orders', authClient, (req, res) => {
   try {
     res.json(listOrderRequestsByCustomer(req.client.customerId));
   } catch (e) { console.error(e); res.status(500).json({ error: 'internal' }); }
 });
 
-
 // ============== PIX (Mercado Pago) ==============
 app.post('/api/installments/:id/pix', async (req, res) => {
   try {
-    // 1) validação de credencial
     if (!MP_TOKEN) {
       return res.status(500).json({ error: 'MP_ACCESS_TOKEN não configurado (.env)' });
     }
@@ -420,7 +485,6 @@ app.post('/api/installments/:id/pix', async (req, res) => {
     const id = Number(req.params.id);
     if (!id) return res.status(400).json({ error: 'id inválido' });
 
-    // 2) carrega parcela + cliente
     const it = getInstallmentWithCustomer(id);
     if (!it) return res.status(404).json({ error: 'Parcela não encontrada' });
     if (String(it.status || '').toLowerCase() === 'pago') {
@@ -434,7 +498,6 @@ app.post('/api/installments/:id/pix', async (req, res) => {
 
     const description = `Parcela #${id} — ${it.customer_name || it.name || 'Cliente'}`;
 
-    // Em DEV use sempre CPF de teste aceito pelo MP (evita rejeições bestas)
     const cpfDev = '19119119100';
     const cpfReal = String(it.cpf || '').replace(/\D/g,'').padEnd(11,'0').slice(0,11);
 
@@ -453,11 +516,10 @@ app.post('/api/installments/:id/pix', async (req, res) => {
       payment_method_id: 'pix',
       payer,
       metadata: { installment_id: id, customer_id: it.customer_id },
-      notification_url: WEBHOOK_URL || undefined, // vazio em dev
+      notification_url: WEBHOOK_URL || undefined,
     };
 
     const p = await mpPayment.create({ body });
-
     const trx = p?.point_of_interaction?.transaction_data || {};
     return res.status(201).json({
       payment_id: p?.id,
@@ -469,11 +531,8 @@ app.post('/api/installments/:id/pix', async (req, res) => {
     });
 
   } catch (e) {
-    // Em dev, devolve detalhes para ver o motivo real (401, 400, etc)
-    const details =
-      e?.response?.data || e?.response || e?.message || e || 'unknown';
+    const details = e?.response?.data || e?.response || e?.message || e || 'unknown';
     console.error('PIX create error:', details);
-
     if (NODE_ENV !== 'production') {
       return res.status(500).json({ error: 'Falha ao gerar PIX', details });
     }
@@ -481,11 +540,11 @@ app.post('/api/installments/:id/pix', async (req, res) => {
   }
 });
 
-// >>> NOVO: endpoint de status (usado pelo front para polling)
+// status de pagamento PIX
 app.get('/api/pix/:paymentId', async (req, res) => {
   try {
     const paymentId = req.params.paymentId;
-    const p = await mpPayment.get({ id: paymentId }); // SDK v2
+    const p = await mpPayment.get({ id: paymentId });
     return res.json({
       id: p?.id,
       status: p?.status,
@@ -508,20 +567,16 @@ app.post('/api/pix/webhook', express.json({ type: '*/*' }), async (req, res) => 
 
     if (!paymentId) { res.status(200).send('ok'); return; }
 
-    const p = await mpPayment.get({ id: paymentId }); // SDK v2
-
+    const p = await mpPayment.get({ id: paymentId });
     if (p?.status === 'approved' && p?.metadata?.installment_id) {
-      try {
-        markInstallmentPaid(Number(p.metadata.installment_id));
-      } catch (err) {
-        console.error('Erro ao marcar parcela paga via webhook:', err);
-      }
+      try { markInstallmentPaid(Number(p.metadata.installment_id)); }
+      catch (err) { console.error('Erro ao marcar parcela paga via webhook:', err); }
     }
 
     res.status(200).send('ok');
   } catch (e) {
     console.error('Webhook error:', e?.response || e);
-    res.status(200).send('ok'); // responda 200 para o MP não re-tentar sem fim
+    res.status(200).send('ok');
   }
 });
 

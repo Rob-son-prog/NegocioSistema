@@ -730,3 +730,6 @@ body.dashboard .client-head:has(#avatarImg[src]) #avatarRemove{ display:inline-f
   body.dashboard .client-actions{ grid-column:1 / -1; justify-content:flex-start; margin-left:calc(52px + 12px); }
 }
 
+/* bordas de alerta nos cards da lista do dashboard */
+.order-card.warn   { border: 2px solid #f59e0b !important; } /* amarelo (vence hoje) */
+.order-card.danger { border: 2px solid #ef4444 !important; } /* vermelho (atrasado) */

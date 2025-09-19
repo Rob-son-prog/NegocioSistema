@@ -7,7 +7,6 @@
   <link rel="stylesheet" href="style.css?v=6" />
 </head>
 <body class="dashboard">
-
   <div class="client-head">
     <div class="client-left">
       <label class="avatar-upload" title="Alterar foto">
@@ -27,6 +26,8 @@
       <div class="menu">
         <a href="dashboard.html" class="item" id="btnVoltar" style="display:none">← Voltar ao painel</a>
         <a id="btnNovoPedido" href="novo-pedido.html" class="item">Fazer novo pedido</a>
+        <!-- Botão Sair — aparece só no modo cliente -->
+        <button id="btnSairCliente" class="item danger" style="margin-top:8px; display:none">Sair</button>
       </div>
     </aside>
 
@@ -88,21 +89,45 @@
   <script src="config.js"></script>
   <script src="portal.js"></script>
 
-  <!-- regra para mostrar/esconder botões (admin x cliente) -->
+  <!-- Controle de modo (admin x cliente) + logout do cliente -->
   <script>
   (function () {
+    const TOKEN_KEY = 'client_token';
     const params  = new URLSearchParams(location.search);
     const isAdmin = ['id','cid','oid'].some(k => params.get(k));
+
     document.body.dataset.mode = isAdmin ? 'admin' : 'client';
 
     const backBtn = document.getElementById('btnVoltar');
     const novoBtn = document.getElementById('btnNovoPedido');
+    const sairBtn = document.getElementById('btnSairCliente');
 
     if (isAdmin) {
+      // Modo admin: mostra "Voltar ao painel", esconde "Novo pedido" e "Sair"
       if (backBtn) backBtn.style.display = '';
       if (novoBtn) novoBtn.style.display = 'none';
+      if (sairBtn) sairBtn.style.display = 'none';
     } else {
+      // Modo cliente: exige token; mostra "Novo pedido" e "Sair"
       if (backBtn) backBtn.remove();
+
+      const token = localStorage.getItem(TOKEN_KEY);
+      if (!token) {
+        // sem sessão → volta para login do cliente
+        location.href = 'acesso-cliente.html';
+        return;
+      }
+
+      if (sairBtn) {
+        sairBtn.style.display = '';
+        sairBtn.addEventListener('click', (e) => {
+          e.preventDefault?.();
+          localStorage.removeItem(TOKEN_KEY);
+          localStorage.removeItem('client_name');
+          localStorage.removeItem('client_id');
+          location.href = 'acesso-cliente.html?logout=1';
+        });
+      }
     }
   })();
   </script>

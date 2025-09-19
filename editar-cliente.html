@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8" />
+  <title>Clientes — editar/excluir</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <link rel="stylesheet" href="style.css?v=6" />
+</head>
+<body class="dashboard">
+  <div class="layout">
+    <aside class="sidebar">
+      <div class="menu">
+        <a class="item" href="dashboard.html">← Voltar ao painel</a>
+        <a class="item" href="cadastro.html">Cadastro de cliente</a>
+      </div>
+    </aside>
+
+    <main class="content">
+      <div class="topbar">
+        <h2>Clientes</h2>
+        <div class="muted">Edite ou exclua os clientes cadastrados</div>
+      </div>
+
+      <section class="panel">
+        <div class="panel-body" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+          <input id="q" class="input" placeholder="Buscar por nome, e-mail ou CPF" style="min-width:260px" />
+          <button id="btnBuscar" class="btn">Buscar</button>
+          <span id="meta" class="muted" style="margin-left:auto"></span>
+        </div>
+      </section>
+
+      <section class="panel">
+        <div class="panel-header"><h3>Lista de clientes</h3></div>
+        <div class="panel-body">
+          <div id="lista" class="stack" style="display:flex;flex-direction:column;gap:12px;"></div>
+          <div style="display:flex;gap:8px;justify-content:center;margin-top:12px">
+            <button id="prev" class="btn">« Anterior</button>
+            <button id="next" class="btn">Próximo »</button>
+          </div>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <script src="editar-cliente.js"></script>
+</body>
+</html>

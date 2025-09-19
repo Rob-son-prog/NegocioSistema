@@ -32,12 +32,41 @@
             <label>CPF
               <input id="c-cpf" required inputmode="numeric" placeholder="000.000.000-00" />
             </label>
+
             <label>E-mail
               <input id="c-email" type="email" placeholder="exemplo@email.com" />
             </label>
             <label>Telefone
               <input id="c-fone" inputmode="tel" placeholder="65999990000" />
             </label>
+
+            <!-- ===== ENDEREÇO ===== -->
+            <label>CEP
+              <input id="c-cep" placeholder="00000-000" maxlength="9" />
+            </label>
+            <label>Número
+              <input id="c-numero" placeholder="nº" />
+            </label>
+
+            <label style="grid-column:1 / -1;">Endereço (Rua/Av.)
+              <input id="c-logradouro" placeholder="Rua/Av." />
+            </label>
+
+            <label>Complemento
+              <input id="c-complemento" placeholder="apto, bloco..." />
+            </label>
+            <label>Bairro
+              <input id="c-bairro" placeholder="Bairro" />
+            </label>
+
+            <label>Cidade
+              <input id="c-cidade" placeholder="Cidade" />
+            </label>
+            <label>UF
+              <input id="c-uf" placeholder="UF" maxlength="2" />
+            </label>
+            <!-- ===================== -->
+
             <div style="grid-column:1/-1;display:flex;gap:8px;align-items:center;">
               <button class="btn primary" type="submit" id="btnSalvarCliente">Salvar cliente</button>
               <span id="msgCliente" class="muted"></span>

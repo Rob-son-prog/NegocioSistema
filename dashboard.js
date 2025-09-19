@@ -1,4 +1,4 @@
-// dashboard.js - KPIs robustos: "Negócios" usa total inicial imutável por contrato
+// dashboard.js — KPIs + lista e alerta visual (borda) por parcelas vencidas/hoje
 const API = 'http://127.0.0.1:4000';
 const $ = (s) => document.querySelector(s);
 
@@ -22,8 +22,6 @@ async function fetchJSON(url, opts = {}) {
   if (!r.ok) throw new Error(data?.error || `Erro de requisição: ${url}`);
   return data;
 }
-
-
 
 // ---------- datas/estados ----------
 function monthRange(d = new Date()) {
@@ -59,7 +57,6 @@ function getInitialTotal(c) {
   try {
     const cached = localStorage.getItem(initKey(id));
     if (cached != null && cached !== '') return Number(cached);
-    // primeira vez que vemos esse contrato → congela o total inicial
     localStorage.setItem(initKey(id), String(current));
   } catch {}
   return current;
@@ -89,7 +86,7 @@ async function getAllContracts() {
 
 // === KPIs ===
 async function loadKPIs() {
-  // Recebidos (mês) — mantém seu endpoint
+  // Recebidos (mês)
   try {
     const r = await fetchJSON(`${API}/api/kpis/recebidos-mes`);
     if (elKpiRecebidos) elKpiRecebidos.textContent = brl(r.total || 0);
@@ -100,13 +97,13 @@ async function loadKPIs() {
   try {
     const contracts = await getAllContracts();
 
-    // Negócios feitos = soma de todos os contratos não removidos (total inicial)
+    // Negócios feitos (soma do total inicial dos contratos não removidos)
     const negocios = contracts
       .filter(c => !isRemoved(c))
       .reduce((s, c) => s + getInitialTotal(c), 0);
     if (elKpiNegocios) elKpiNegocios.textContent = brl(negocios);
 
-    // Vendas (mês) = soma dos contratos criados no mês corrente (total inicial)
+    // Vendas (mês) — contratos criados no mês corrente
     const { start, end } = monthRange();
     const vendasMes = contracts
       .filter(c => !isRemoved(c) && inMonth(pickCreatedAt(c), { start, end }))
@@ -121,14 +118,15 @@ async function loadKPIs() {
 
 // === Lista de contratos recentes (cards finos) ===
 function rowTemplate(c) {
-  const total = brl(asNumberTotal(c)); // exibição pode ser o atual
+  const total = brl(asNumberTotal(c));
   const dt = fdate((pickCreatedAt(c) || '').slice?.(0, 10) || pickCreatedAt(c));
-  const tipo = (c.tipo || 'negocio').toLowerCase(); // negocio | venda
+  const tipo = (c.tipo || 'negocio').toLowerCase();
   const tipoClass = tipo === 'venda' ? 'venda' : 'negocio';
   const tipoLabel = tipo === 'venda' ? 'Venda' : 'Negócio';
 
+  // id do card = c-<contract_id> e data-customer pro fetch rápido
   return `
-    <div class="order-card">
+    <div class="order-card" id="c-${c.id}" data-customer="${c.customer_id}">
       <div class="order-left">
         <span class="order-name">${c.customer_name || 'Cliente'}</span>
         <span class="badge ${tipoClass}">${tipoLabel}</span>
@@ -152,18 +150,76 @@ async function loadOrders() {
       return;
     }
     listEl.innerHTML = items.map(rowTemplate).join('');
+
+    // Após renderizar, checar parcelas e colorir a borda
+    markOverdues(items);
   } catch (e) {
     console.error(e);
     listEl.innerHTML = `<div class="muted">${e.message}</div>`;
   }
 }
 
+// ---------- marca borda conforme parcelas ----------
+function isoToDate(d) { return new Date(`${d}T00:00:00Z`); }
+function isTodayISO(d) {
+  const today = new Date();
+  const a = new Date(Date.UTC(today.getFullYear(), today.getMonth(), today.getDate()));
+  const b = isoToDate(d);
+  return a.getTime() === b.getTime();
+}
+function isPastISO(d) {
+  const today = new Date();
+  const a = new Date(Date.UTC(today.getFullYear(), today.getMonth(), today.getDate()));
+  const b = isoToDate(d);
+  return b.getTime() < a.getTime();
+}
+
+async function markOverdues(contracts) {
+  // agrupa contratos por cliente (um fetch por cliente)
+  const byCustomer = new Map();
+  for (const c of contracts) {
+    if (!byCustomer.has(c.customer_id)) byCustomer.set(c.customer_id, []);
+    byCustomer.get(c.customer_id).push(c.id);
+  }
+
+  for (const [customerId, contractIds] of byCustomer.entries()) {
+    try {
+      const data = await fetchJSON(`${API}/api/admin/portal/${customerId}`);
+      const inst = Array.isArray(data?.installments) ? data.installments : [];
+
+      const pendentes = inst.filter(i => String(i.status || '').toLowerCase() !== 'pago');
+
+      const temAtraso = pendentes.some(i => i.due && isPastISO(i.due));
+      const venceHoje = !temAtraso && pendentes.some(i => i.due && isTodayISO(i.due));
+
+      for (const contractId of contractIds) {
+        const el = document.getElementById(`c-${contractId}`);
+        if (!el) continue;
+
+        el.classList.remove('danger', 'warn');
+        el.style.border = ''; // fallback, caso CSS não esteja com classes
+
+        if (temAtraso) {
+          el.classList.add('danger');
+          if (!el.style.border) el.style.border = '2px solid #ef4444';
+        } else if (venceHoje) {
+          el.classList.add('warn');
+          if (!el.style.border) el.style.border = '2px solid #f59e0b';
+        }
+      }
+    } catch (err) {
+      console.debug('markOverdues falhou para cliente', customerId, err?.message || err);
+    }
+  }
+}
+
+// ---------- boot ----------
 async function boot() {
   await loadKPIs();
   await loadOrders();
 }
 
-// Ações: abrir portal (modo admin), editar (mesmo portal), excluir contrato
+// ---------- ações ----------
 document.addEventListener('click', async (e) => {
   const t = e.target;
   if (!(t instanceof HTMLElement)) return;
@@ -176,19 +232,38 @@ document.addEventListener('click', async (e) => {
     location.href = `portal.html?id=${portalId}`;
     return;
   }
+
   if (editId) {
-    location.href = `portal.html?id=${editId}`;
+    location.href = `editar-cliente.html?id=${editId}`;
     return;
   }
+
   if (delId) {
     const ok = confirm('Excluir ESTE contrato e TODAS as parcelas?');
     if (!ok) return;
+
+    const code = prompt('Digite o código de exclusão:');
+    if (code === null) return;
+    if (!code.trim()) { alert('Código obrigatório.'); return; }
+
     try {
-      await fetchJSON(`${API}/api/contracts/${delId}`, { method: 'DELETE' });
-      // apaga o cache do total inicial para esse contrato
-      forgetInitialTotal(delId);
+      const r = await fetch(`${API}/api/contracts/${delId}`, {
+        method: 'DELETE',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Delete-Code': code, // senha (ex.: 116477)
+        },
+      });
+      const data = await r.json().catch(() => ({}));
+
+      if (!r.ok) {
+        alert(data?.error || `Falha ao excluir (HTTP ${r.status}).`);
+        return;
+      }
+
+      forgetInitialTotal?.(delId);
       await loadOrders();
-      await loadKPIs(); // atualiza KPIs após excluir
+      await loadKPIs();
     } catch (err) {
       alert(err.message || 'Falha ao excluir.');
     }
