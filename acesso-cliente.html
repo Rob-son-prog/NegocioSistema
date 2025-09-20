@@ -20,17 +20,22 @@
     </form>
   </div>
 
+  <!-- SEMPRE primeiro -->
+  <script src="config.js?v=3"></script>
+
   <script>
   (function(){
-    const API = 'http://127.0.0.1:4000';
+    // Usa a base vinda do config; em produção será mesma origem ("")
+    const API =
+      (window.APP_CONFIG && window.APP_CONFIG.API_URL !== undefined)
+        ? window.APP_CONFIG.API_URL
+        : (location.hostname.endsWith('.onrender.com') ? '' : 'http://127.0.0.1:4000');
+
     const TOKEN_KEY = 'client_token';
 
-    // Se já tem sessão, pula direto pro portal
+    // Se já tem sessão, vai direto
     const already = localStorage.getItem(TOKEN_KEY);
-    if (already) { 
-      location.href = 'portal.html'; 
-      return; 
-    }
+    if (already) { location.href = 'portal.html'; return; }
 
     const form = document.getElementById('formLogin');
     const cpfEl = document.getElementById('cpf');
@@ -50,10 +55,7 @@
       e.preventDefault();
       out.textContent = '';
       const cpf = cpfEl.value.replace(/\D/g,'');
-      if (cpf.length !== 11){ 
-        out.textContent = 'CPF inválido.'; 
-        return; 
-      }
+      if (cpf.length !== 11){ out.textContent = 'CPF inválido.'; return; }
 
       btn.disabled = true;
       try{
@@ -62,28 +64,27 @@
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ cpf })
         });
-        const data = await res.json();
+
+        const text = await res.text();
+        let data;
+        try { data = JSON.parse(text); } catch { data = {}; }
 
         if (!res.ok){
-          out.textContent = data?.error || 'Não foi possível entrar.';
+          out.textContent = data?.error || `Falha no login (HTTP ${res.status})`;
           btn.disabled = false;
           return;
         }
 
-        // guarda token do cliente
-        localStorage.setItem(TOKEN_KEY, data.token);
-
-        // opcional: guardar nome/id pra exibir no portal
+        localStorage.setItem(TOKEN_KEY, data.token || '');
         if (data.customer) {
           localStorage.setItem('client_name', data.customer.name || '');
-          localStorage.setItem('client_id', data.customer.id || '');
+          localStorage.setItem('client_id', String(data.customer.id || ''));
         }
-
-        // redireciona para o portal
         location.href = 'portal.html';
       }catch(err){
         out.textContent = 'Erro: ' + (err?.message || 'Falha de conexão');
         console.error('LOGIN ERRO', err);
+      }finally{
         btn.disabled = false;
       }
     });
