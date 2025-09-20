@@ -2,11 +2,18 @@
 import Database from 'better-sqlite3';
 import { fileURLToPath } from 'url';
 import path from 'path';
+import fs from 'fs';
 import bcrypt from 'bcryptjs';
 
-
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const dbPath = path.join(__dirname, 'data', 'data.sqlite');
+
+// garante que a pasta server/data exista (Render não cria pasta vazia)
+const dataDir = path.join(__dirname, 'data');
+if (!fs.existsSync(dataDir)) {
+  fs.mkdirSync(dataDir, { recursive: true });
+}
+
+const dbPath = path.join(dataDir, 'data.sqlite');
 const db = new Database(dbPath);
 
 // ---------- criação de tabelas (idempotente) ----------
@@ -78,8 +85,7 @@ function normalizeCpf(cpf) {
   const d = onlyDigits(cpf).padStart(11, '0').slice(0, 11);
   return d.replace(/^(\d{3})(\d{3})(\d{3})(\d{2})$/, '$1.$2.$3-$4');
 }
-const toISODate = (d) =>
-  new Date(d).toISOString().slice(0, 10); // YYYY-MM-DD
+const toISODate = (d) => new Date(d).toISOString().slice(0, 10); // YYYY-MM-DD
 
 // ---------- admin por .env (fallback) ----------
 const ENV_ADMIN = {
@@ -95,7 +101,6 @@ function createCustomer({
   email = null,
   phone = null,
   cpf,
-
   // endereço (opcionais)
   cep = null,
   logradouro = null,
