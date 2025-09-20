@@ -1,16 +1,21 @@
-const API = 'http://127.0.0.1:4000';
-const $ = (s, r = document) => r.querySelector(s);
+// Base da API: usa config.js (APP_CONFIG) ou mesma origem no Render; localhost no dev
+const API =
+  (window.APP_CONFIG && window.APP_CONFIG.API_URL !== undefined)
+    ? window.APP_CONFIG.API_URL
+    : (location.hostname.endsWith('.onrender.com') ? '' : 'http://127.0.0.1:4000');
+
+const $  = (s, r = document) => r.querySelector(s);
 const $$ = (s, r = document) => [...r.querySelectorAll(s)];
 
 let page = 0, limit = 20, currentSearch = '';
 
 const els = {
-  q: $('#q'),
+  q:         $('#q'),
   btnBuscar: $('#btnBuscar'),
-  lista: $('#lista'),
-  meta: $('#meta'),
-  prev: $('#prev'),
-  next: $('#next'),
+  lista:     $('#lista'),
+  meta:      $('#meta'),
+  prev:      $('#prev'),
+  next:      $('#next'),
 };
 
 function maskCEP(v) {
@@ -23,7 +28,7 @@ async function viacep(cep) {
   cep = (cep || '').replace(/\D/g,'');
   if (cep.length !== 8) return null;
   const r = await fetch(`https://viacep.com.br/ws/${cep}/json/`);
-  const j = await r.json();
+  const j = await r.json().catch(() => ({}));
   if (j.erro) return null;
   return j;
 }
@@ -124,7 +129,7 @@ async function load() {
   const params = new URLSearchParams({ limit, offset: page * limit });
   if (currentSearch) params.set('search', currentSearch);
   const r = await fetch(`${API}/api/customers?${params.toString()}`);
-  const data = await r.json();
+  const data = await r.json().catch(() => []);
   els.lista.innerHTML = '';
   data.forEach(c => els.lista.appendChild(customerCard(c)));
   els.meta.textContent = data.length ? `Exibindo ${data.length} cliente(s)` : 'Nenhum cliente encontrado';
@@ -132,8 +137,8 @@ async function load() {
   els.next.disabled = data.length < limit;
 }
 
-els.btnBuscar.addEventListener('click', () => { currentSearch = els.q.value.trim(); page = 0; load(); });
-els.q.addEventListener('keydown', (e) => { if (e.key === 'Enter') { currentSearch = els.q.value.trim(); page = 0; load(); }});
+els.btnBuscar.addEventListener('click', () => { currentSearch = (els.q.value || '').trim(); page = 0; load(); });
+els.q.addEventListener('keydown', (e) => { if (e.key === 'Enter') { currentSearch = (els.q.value || '').trim(); page = 0; load(); }});
 els.prev.addEventListener('click', () => { if (page>0){ page--; load(); }});
 els.next.addEventListener('click', () => { page++; load(); });
 
