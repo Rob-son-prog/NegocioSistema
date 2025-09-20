@@ -1,5 +1,18 @@
-// dashboard.js — KPIs + lista e alerta visual (borda) por parcelas vencidas/hoje
-const API = 'http://127.0.0.1:4000';
+// dashboard.js — KPIs + lista e marcação visual
+
+/************ BASE DA API E TOKEN ************/
+const CFG  = window.APP_CONFIG || {};
+// No Render usa mesma origem (''); em dev usa localhost:4000
+const API  = CFG.API_URL || (location.hostname.endsWith('.onrender.com') ? '' : 'http://127.0.0.1:4000');
+const BASE = API === '' ? '' : API;
+
+const TOKEN = CFG.AUTH_TOKEN || localStorage.getItem('admin_token') || localStorage.getItem('token') || '';
+
+const AUTH_HEADERS = TOKEN
+  ? { 'Content-Type': 'application/json', 'Authorization': `Bearer ${TOKEN}` }
+  : { 'Content-Type': 'application/json' };
+
+/************ HELPERS ************/
 const $ = (s) => document.querySelector(s);
 
 const listEl          = $('#ordersRow');
@@ -17,13 +30,18 @@ const fdate = (iso) => {
 };
 
 async function fetchJSON(url, opts = {}) {
-  const r = await fetch(url, opts);
-  const data = await r.json().catch(() => ({}));
-  if (!r.ok) throw new Error(data?.error || `Erro de requisição: ${url}`);
+  const r = await fetch(url, {
+    ...opts,
+    headers: { ...(opts.headers || {}), ...AUTH_HEADERS }
+  });
+  const text = await r.text();
+  let data;
+  try { data = JSON.parse(text); } catch { data = {}; }
+  if (!r.ok) throw new Error(data?.error || `Erro de requisição: ${r.status} ${r.statusText}`);
   return data;
 }
 
-// ---------- datas/estados ----------
+/************ Datas/estados ************/
 function monthRange(d = new Date()) {
   const start = new Date(d.getFullYear(), d.getMonth(), 1);
   const end   = new Date(d.getFullYear(), d.getMonth() + 1, 1); // exclusivo
@@ -48,7 +66,7 @@ function pickCreatedAt(c) {
   return c.created_at || c.createdAt || c.data || c.dt || null;
 }
 
-// ---------- total imutável (cache local) ----------
+/************ Total imutável (cache local) ************/
 const initKey = (id) => `kpi:contract:${id}:initial_total`;
 function getInitialTotal(c) {
   const id = c?.id;
@@ -65,14 +83,14 @@ function forgetInitialTotal(id) {
   try { localStorage.removeItem(initKey(id)); } catch {}
 }
 
-// ---------- tenta várias rotas até listar todos os contratos ----------
+/************ Contratos — tenta várias rotas ************/
 async function getAllContracts() {
   const endpoints = [
-    `${API}/api/contracts?all=1`,
-    `${API}/api/contracts`,
-    `${API}/api/contracts/list`,
-    `${API}/api/admin/contracts`,
-    `${API}/api/contracts/recent?limit=1000`,
+    `${BASE}/api/contracts?all=1`,
+    `${BASE}/api/contracts`,
+    `${BASE}/api/contracts/list`,
+    `${BASE}/api/admin/contracts`,
+    `${BASE}/api/contracts/recent?limit=1000`,
   ];
   for (const url of endpoints) {
     try {
@@ -84,11 +102,11 @@ async function getAllContracts() {
   return [];
 }
 
-// === KPIs ===
+/************ KPIs ************/
 async function loadKPIs() {
   // Recebidos (mês)
   try {
-    const r = await fetchJSON(`${API}/api/kpis/recebidos-mes`);
+    const r = await fetchJSON(`${BASE}/api/kpis/recebidos-mes`);
     if (elKpiRecebidos) elKpiRecebidos.textContent = brl(r.total || 0);
   } catch {
     if (elKpiRecebidos) elKpiRecebidos.textContent = '—';
@@ -97,13 +115,13 @@ async function loadKPIs() {
   try {
     const contracts = await getAllContracts();
 
-    // Negócios feitos (soma do total inicial dos contratos não removidos)
+    // Negócios feitos
     const negocios = contracts
       .filter(c => !isRemoved(c))
       .reduce((s, c) => s + getInitialTotal(c), 0);
     if (elKpiNegocios) elKpiNegocios.textContent = brl(negocios);
 
-    // Vendas (mês) — contratos criados no mês corrente
+    // Vendas (mês)
     const { start, end } = monthRange();
     const vendasMes = contracts
       .filter(c => !isRemoved(c) && inMonth(pickCreatedAt(c), { start, end }))
@@ -116,7 +134,7 @@ async function loadKPIs() {
   }
 }
 
-// === Lista de contratos recentes (cards finos) ===
+/************ Lista de contratos recentes ************/
 function rowTemplate(c) {
   const total = brl(asNumberTotal(c));
   const dt = fdate((pickCreatedAt(c) || '').slice?.(0, 10) || pickCreatedAt(c));
@@ -124,7 +142,6 @@ function rowTemplate(c) {
   const tipoClass = tipo === 'venda' ? 'venda' : 'negocio';
   const tipoLabel = tipo === 'venda' ? 'Venda' : 'Negócio';
 
-  // id do card = c-<contract_id> e data-customer pro fetch rápido
   return `
     <div class="order-card" id="c-${c.id}" data-customer="${c.customer_id}">
       <div class="order-left">
@@ -144,22 +161,20 @@ function rowTemplate(c) {
 
 async function loadOrders() {
   try {
-    const items = await fetchJSON(`${API}/api/contracts/recent?limit=50`);
+    const items = await fetchJSON(`${BASE}/api/contracts/recent?limit=50`);
     if (!items?.length) {
       listEl.innerHTML = `<div class="muted">Nenhum pedido ainda…</div>`;
       return;
     }
     listEl.innerHTML = items.map(rowTemplate).join('');
-
-    // Após renderizar, checar parcelas e colorir a borda
-    markOverdues(items);
+    await markOverdues(items);
   } catch (e) {
     console.error(e);
     listEl.innerHTML = `<div class="muted">${e.message}</div>`;
   }
 }
 
-// ---------- marca borda conforme parcelas ----------
+/************ marca borda conforme parcelas ************/
 function isoToDate(d) { return new Date(`${d}T00:00:00Z`); }
 function isTodayISO(d) {
   const today = new Date();
@@ -175,7 +190,6 @@ function isPastISO(d) {
 }
 
 async function markOverdues(contracts) {
-  // agrupa contratos por cliente (um fetch por cliente)
   const byCustomer = new Map();
   for (const c of contracts) {
     if (!byCustomer.has(c.customer_id)) byCustomer.set(c.customer_id, []);
@@ -184,11 +198,10 @@ async function markOverdues(contracts) {
 
   for (const [customerId, contractIds] of byCustomer.entries()) {
     try {
-      const data = await fetchJSON(`${API}/api/admin/portal/${customerId}`);
+      const data = await fetchJSON(`${BASE}/api/admin/portal/${customerId}`);
       const inst = Array.isArray(data?.installments) ? data.installments : [];
 
       const pendentes = inst.filter(i => String(i.status || '').toLowerCase() !== 'pago');
-
       const temAtraso = pendentes.some(i => i.due && isPastISO(i.due));
       const venceHoje = !temAtraso && pendentes.some(i => i.due && isTodayISO(i.due));
 
@@ -197,7 +210,7 @@ async function markOverdues(contracts) {
         if (!el) continue;
 
         el.classList.remove('danger', 'warn');
-        el.style.border = ''; // fallback, caso CSS não esteja com classes
+        el.style.border = '';
 
         if (temAtraso) {
           el.classList.add('danger');
@@ -213,16 +226,25 @@ async function markOverdues(contracts) {
   }
 }
 
-// ---------- boot ----------
+/************ Boot ************/
 async function boot() {
   await loadKPIs();
   await loadOrders();
 }
 
-// ---------- ações ----------
+/************ Ações (portal/editar/excluir/logout) ************/
 document.addEventListener('click', async (e) => {
   const t = e.target;
   if (!(t instanceof HTMLElement)) return;
+
+  if (t.id === 'logout') {
+    try {
+      localStorage.removeItem('admin_token');
+      localStorage.removeItem('token');
+      // redireciona pelo href normal
+    } catch {}
+    return; // deixa o link seguir para index.html
+  }
 
   const portalId = t.dataset.portal;
   const editId   = t.dataset.edit;
@@ -247,14 +269,12 @@ document.addEventListener('click', async (e) => {
     if (!code.trim()) { alert('Código obrigatório.'); return; }
 
     try {
-      const r = await fetch(`${API}/api/contracts/${delId}`, {
+      const r = await fetch(`${BASE}/api/contracts/${delId}`, {
         method: 'DELETE',
-        headers: {
-          'Content-Type': 'application/json',
-          'X-Delete-Code': code, // senha (ex.: 116477)
-        },
+        headers: { ...AUTH_HEADERS, 'X-Delete-Code': code },
       });
-      const data = await r.json().catch(() => ({}));
+      const text = await r.text();
+      let data; try { data = JSON.parse(text); } catch { data = {}; }
 
       if (!r.ok) {
         alert(data?.error || `Falha ao excluir (HTTP ${r.status}).`);
@@ -271,3 +291,6 @@ document.addEventListener('click', async (e) => {
 });
 
 document.addEventListener('DOMContentLoaded', boot);
+
+// (Opcional) Log para depuração
+// console.log('[dashboard] BASE =', BASE || '(mesma origem)', 'token?', !!TOKEN);
