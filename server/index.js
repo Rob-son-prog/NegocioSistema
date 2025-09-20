@@ -54,9 +54,9 @@ import {
 import { MercadoPagoConfig, Payment } from 'mercadopago';
 
 // --- ENV/MP ---
-const MP_TOKEN = process.env.MP_ACCESS_TOKEN || '';
+const MP_TOKEN = (process.env.MP_ACCESS_TOKEN || '').replace(/\s+/g, ''); // <- sanitize forte: remove espaços/quebras
 const NODE_ENV = process.env.NODE_ENV || 'development';
-const WEBHOOK_URL = process.env.WEBHOOK_URL || '';
+const WEBHOOK_URL = (process.env.WEBHOOK_URL || '').trim(); // <- tira espaços/quebras nas pontas
 
 console.log('Mercado Pago token em uso (prefixo):', (MP_TOKEN || '').slice(0, 7) || '(vazio)');
 // Em produção, apenas avisa se não for APP_USR (não derruba o processo)
