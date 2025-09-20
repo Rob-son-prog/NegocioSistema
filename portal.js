@@ -1,5 +1,10 @@
 // ======== PORTAL (API MODE) ========
-const API = window.API || 'http://127.0.0.1:4000';
+// Base da API: pega do config.js; no Render usa a MESMA origem (string vazia)
+const CFG = window.APP_CONFIG || {};
+const API =
+  CFG.API_URL ??
+  (location.hostname.endsWith('.onrender.com') ? '' : 'http://127.0.0.1:4000');
+
 const TOKEN_KEY = 'client_token';
 const $  = (s) => document.querySelector(s);
 const brl = (v) => (Number(v || 0)).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
@@ -22,16 +27,29 @@ function fdate(iso){ if(!iso) return '—'; const d=new Date(iso+'T00:00:00'); r
 function initials(name){ return (name||'').trim().split(/\s+/).slice(0,2).map(s => (s[0]||'').toUpperCase()).join('') || '?'; }
 function getAdminCustomerId(){ const p=new URLSearchParams(location.search); return p.get('id')||p.get('cid')||p.get('oid'); }
 
-async function fetchJSON(url, opts={}){ const r=await fetch(url,opts); const data=await r.json().catch(()=>({})); if(!r.ok) throw new Error(data?.error||'Erro de requisição'); return data; }
+// fetch JSON robusto (evita erro quando o servidor devolve HTML em caso de 404/CORS)
+async function fetchJSON(url, opts={}){
+  const r = await fetch(url, opts);
+  const text = await r.text();
+  let data; try { data = JSON.parse(text); } catch { data = {}; }
+  if (!r.ok) throw new Error(data?.error || `Erro HTTP ${r.status}`);
+  return data;
+}
 
 async function loadData(){
   const adminId = getAdminCustomerId();
+  const base = API === '' ? '' : API;
+
   if (adminId){
-    return await fetchJSON(`${API}/api/admin/portal/${adminId}`);
+    // ROTA ADMIN
+    return await fetchJSON(`${base}/api/admin/portal/${adminId}`);
   } else {
+    // ROTA CLIENTE (precisa de token)
     const token = localStorage.getItem(TOKEN_KEY);
     if (!token){ location.href = 'acesso-cliente.html'; return null; }
-    return await fetchJSON(`${API}/api/client/portal`, { headers:{ Authorization:'Bearer '+token } });
+    return await fetchJSON(`${base}/api/client/portal`, {
+      headers:{ Authorization:'Bearer '+token }
+    });
   }
 }
 
@@ -128,7 +146,9 @@ async function loadOrderAlerts() {
   try {
     const token = localStorage.getItem('client_token');
     if (!token) return;
-    const res = await fetch(`${API}/api/client/orders`, { headers: { Authorization: 'Bearer ' + token } });
+
+    const base = API === '' ? '' : API;
+    const res = await fetch(`${base}/api/client/orders`, { headers: { Authorization: 'Bearer ' + token } });
     const data = await res.json().catch(() => []);
     if (!res.ok) throw new Error(data?.error || 'Falha ao carregar pedidos');
     renderOrderAlert(data);
@@ -222,6 +242,8 @@ function render(data){
     const payId = t.dataset.pay;
     const delId = t.dataset.del;
 
+    const base = API === '' ? '' : API;
+
     // PIX
     if (pixId) {
       try {
@@ -230,7 +252,7 @@ function render(data){
           const tk = localStorage.getItem('client_token');
           if (tk) headers.Authorization = 'Bearer ' + tk;
         }
-        const r = await fetch(`${API}/api/installments/${pixId}/pix`, { method: 'POST', headers });
+        const r = await fetch(`${base}/api/installments/${pixId}/pix`, { method: 'POST', headers });
         const data = await r.json().catch(()=> ({}));
 
         if (!r.ok) {
@@ -261,7 +283,7 @@ function render(data){
       const ok = confirm('Confirmar baixa desta parcela?');
       if (!ok) return;
       try{
-        await fetchJSON(`${API}/api/installments/${payId}/pay`, { method:'POST' });
+        await fetchJSON(`${base}/api/installments/${payId}/pay`, { method:'POST' });
         const fresh = await loadData();
         render(fresh);
       }catch(err){
@@ -286,7 +308,7 @@ function render(data){
       }
 
       try{
-        await fetchJSON(`${API}/api/installments/${delId}`, { method:'DELETE' });
+        await fetchJSON(`${base}/api/installments/${delId}`, { method:'DELETE' });
         const fresh = await loadData();
         render(fresh);
       }catch(err){
@@ -343,10 +365,11 @@ function openPixModal({ installment_id, qr_base64, qr_code, payment_id, ticket_u
 
   // polling do status (funciona mesmo sem webhook em dev)
   if (payment_id) {
+    const base = API === '' ? '' : API;
     if (_pixPoll) { clearInterval(_pixPoll); _pixPoll = null; }
     _pixPoll = setInterval(async ()=>{
       try{
-        const r = await fetch(`${API}/api/pix/${payment_id}`);
+        const r = await fetch(`${base}/api/pix/${payment_id}`);
         const data = await r.json().catch(()=> ({}));
         if (data?.status === 'approved') {
           if (status) status.textContent = 'Pagamento aprovado ✅';
@@ -354,7 +377,7 @@ function openPixModal({ installment_id, qr_base64, qr_code, payment_id, ticket_u
           // >>> SEM WEBHOOK: baixa a parcela imediatamente
           if (installment_id) {
             try {
-              await fetch(`${API}/api/installments/${installment_id}/pay`, { method: 'POST' });
+              await fetch(`${base}/api/installments/${installment_id}/pay`, { method: 'POST' });
             } catch { /* silencioso */ }
           }
 
