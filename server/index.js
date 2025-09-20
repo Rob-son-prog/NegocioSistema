@@ -53,23 +53,41 @@ import {
 // ===== Mercado Pago SDK v2 =====
 import { MercadoPagoConfig, Payment } from 'mercadopago';
 
-// ====== ENV & MP TOKEN ======
+// --- INÍCIO: ajustes de segurança/sandbox ---
 const MP_TOKEN = process.env.MP_ACCESS_TOKEN || '';
 const NODE_ENV = process.env.NODE_ENV || 'development';
-const WEBHOOK_URL = process.env.WEBHOOK_URL || '';
 
-console.log('MP token ativo (prefixo):', (MP_TOKEN || '').slice(0, 7) || '(vazio)');
-if (process.env.NODE_ENV === 'production' && !MP_TOKEN.startsWith('APP_USR-')) {
-  throw new Error('Em produção o MP_ACCESS_TOKEN precisa começar com APP_USR- (token real).');
+console.log('Mercado Pago token em uso (prefixo):', MP_TOKEN.slice(0, 7) || '(vazio)');
+
+if (NODE_ENV !== 'production' && MP_TOKEN.startsWith('APP_USR-')) {
+  console.warn(
+    '[ATENÇÃO] Você está em', NODE_ENV,
+    'mas o MP_ACCESS_TOKEN é APP_USR- (produção). Troque para TEST- no .env.'
+  );
 }
+// --- FIM: ajustes de segurança/sandbox ---
 
-// Aceita APP_USR mesmo em desenvolvimento (para você testar local com token real)
 const mpClient = new MercadoPagoConfig({ accessToken: MP_TOKEN });
 const mpPayment = new Payment(mpClient);
+const WEBHOOK_URL = process.env.WEBHOOK_URL || '';
 
 const app = express();
 
-/* ===================== CORS ===================== */
+/* ===================== CORS =====================
+
+   Libera:
+   - Live Server local (127 e localhost:5500) para desenvolvimento
+   - Domínio do Render para produção
+
+   Obs.: incluí a checagem que permite requests SEM "Origin"
+   (ex.: /health chamado por monitoramento), para não bloquear.
+*/
+const ALLOWED_ORIGINS = [
+  'http://127.0.0.1:5500',
+  'http://localhost:5500',
+  'https://negociosistema.onrender.com', // <- seu domínio no Render
+];
+
 const allowedOrigins = [
   'http://127.0.0.1:5500',
   'http://localhost:5500',
@@ -87,8 +105,6 @@ app.use(cors({
   credentials: true,
 }));
 
-app.use(express.json());
-
 // servir arquivos estáticos do front (index.html, style.css, *.js)
 app.use(express.static(PUBLIC_DIR));
 
@@ -98,6 +114,7 @@ app.get('/', (_req, res) => {
 });
 
 // opcional: healthcheck
+// Healthcheck detalhado (substitui o "ok")
 app.get('/health', (_req, res) => {
   res.json({
     ok: true,
@@ -106,6 +123,10 @@ app.get('/health', (_req, res) => {
     node_env: NODE_ENV,
   });
 });
+
+
+app.options('*', cors());
+app.use(express.json());
 
 const JWT_SECRET = process.env.JWT_SECRET || 'dev-secret';
 
@@ -499,6 +520,9 @@ app.post('/api/installments/:id/pix', async (req, res) => {
     if (!MP_TOKEN) {
       return res.status(500).json({ error: 'MP_ACCESS_TOKEN não configurado (.env)' });
     }
+    if (NODE_ENV !== 'production' && MP_TOKEN.startsWith('APP_USR-')) {
+      return res.status(400).json({ error: 'Em desenvolvimento use um token TEST- do Mercado Pago (sandbox).' });
+    }
 
     const id = Number(req.params.id);
     if (!id) return res.status(400).json({ error: 'id inválido' });
@@ -509,23 +533,23 @@ app.post('/api/installments/:id/pix', async (req, res) => {
       return res.status(409).json({ error: 'Parcela já paga' });
     }
 
-    const rawValue = Number(it.value ?? it.valor ?? 0);
-    const transaction_amount = Math.round((rawValue + Number.EPSILON) * 100) / 100;
-    if (!transaction_amount || Number.isNaN(transaction_amount)) {
+    const transaction_amount = Number(it.value || it.valor || 0);
+    if (!transaction_amount || isNaN(transaction_amount)) {
       return res.status(400).json({ error: 'Valor da parcela inválido' });
     }
 
-    const description = `Parcela #${id} — ${it.customer_name || it.name || 'Cliente'}`.slice(0, 60);
+    const description = `Parcela #${id} — ${it.customer_name || it.name || 'Cliente'}`;
 
-    const cpf = String(it.cpf || '')
-      .replace(/\D/g,'')
-      .padEnd(11,'0')
-      .slice(0,11);
+    const cpfDev = '19119119100';
+    const cpfReal = String(it.cpf || '').replace(/\D/g,'').padEnd(11,'0').slice(0,11);
 
     const payer = {
-      first_name: (it.customer_name || it.name || 'Cliente').split(' ')[0] || 'Cliente',
-      email: (it.email && /\S+@\S+\.\S+/.test(it.email)) ? it.email : 'comprador@example.com',
-      identification: { type: 'CPF', number: cpf }
+      first_name: (it.customer_name || it.name || '').split(' ')[0] || 'Cliente',
+      email: it.email || 'comprador_teste@example.com',
+      identification: {
+        type: 'CPF',
+        number: NODE_ENV !== 'production' ? cpfDev : cpfReal
+      }
     };
 
     const body = {
@@ -533,16 +557,11 @@ app.post('/api/installments/:id/pix', async (req, res) => {
       description,
       payment_method_id: 'pix',
       payer,
-      statement_descriptor: 'NEGOCIOSISTEMA'.slice(0, 22),
       metadata: { installment_id: id, customer_id: it.customer_id },
-      notification_url: WEBHOOK_URL || undefined
+      notification_url: WEBHOOK_URL || undefined,
     };
 
-    const p = await mpPayment.create({
-      body,
-      requestOptions: { idempotencyKey: `pix-${id}-${Date.now()}` }
-    });
-
+    const p = await mpPayment.create({ body });
     const trx = p?.point_of_interaction?.transaction_data || {};
     return res.status(201).json({
       payment_id: p?.id,
@@ -554,14 +573,12 @@ app.post('/api/installments/:id/pix', async (req, res) => {
     });
 
   } catch (e) {
-    const status = e?.response?.status;
-    const data   = e?.response?.data;
-    console.error('MP PIX ERROR ->', { status, data, message: e?.message });
-    return res.status(status || 500).json({
-      error: 'Falha ao gerar PIX',
-      status: status || 500,
-      details: data || e?.message || 'unknown'
-    });
+    const details = e?.response?.data || e?.response || e?.message || e || 'unknown';
+    console.error('PIX create error:', details);
+    if (NODE_ENV !== 'production') {
+      return res.status(500).json({ error: 'Falha ao gerar PIX', details });
+    }
+    return res.status(500).json({ error: 'Falha ao gerar PIX' });
   }
 });
 
