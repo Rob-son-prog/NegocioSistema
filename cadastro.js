@@ -1,5 +1,8 @@
 // cadastro.js
-const API = 'http://127.0.0.1:4000';
+// Usa mesma origem no Render; em dev usa localhost:4000
+const CFG = window.APP_CONFIG || {};
+const API = CFG.API_URL ?? (location.hostname.endsWith('.onrender.com') ? '' : 'http://127.0.0.1:4000');
+
 const TOKEN_KEY = 'client_token';
 
 const $ = (s) => document.querySelector(s);
