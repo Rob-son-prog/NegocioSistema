@@ -5,6 +5,11 @@ import path from 'path';
 import express from 'express';            // só para usar express.json({ type: '*/*' }) no webhook
 import jwt from 'jsonwebtoken';
 import bcrypt from 'bcryptjs';
+import { fileURLToPath } from 'url';
+
+// resolve __dirname neste módulo ES
+const __filename = fileURLToPath(import.meta.url);
+const __dirname  = path.dirname(__filename);
 
 // cria o app e middlewares (sem rotas) — evita import circular/TDZ
 import { app, PUBLIC_DIR } from './app.js';
@@ -70,7 +75,9 @@ const mpPayment = new Payment(mpClient);
    BACKUP R2 — (fica logo após os middlewares do app)
    =========================================================== */
 const BACKUP_TOKEN = process.env.BACKUP_TOKEN || 'minha-senha-456';
-const DB_FILE = process.env.DB_FILE || path.join(process.cwd(), 'server', 'data', 'data.sqlite');
+
+// ✅ usa a pasta do próprio arquivo (server/data/data.sqlite)
+const DB_FILE = process.env.DB_FILE || path.join(__dirname, 'data', 'data.sqlite');
 
 // Exporta o SQLite atual para o R2
 app.post('/api/backup/export', async (req, res) => {
@@ -100,6 +107,9 @@ app.post('/api/backup/restore', async (req, res) => {
     const dst = DB_FILE;
     const bak = `${dst}.bak.${Date.now()}`;
     const tmp = `${dst}.restore.tmp`;
+
+    // ✅ garante que a pasta existe antes de escrever
+    fs.mkdirSync(path.dirname(dst), { recursive: true });
 
     fs.writeFileSync(tmp, fileBuf);
     if (fs.existsSync(dst)) fs.renameSync(dst, bak);
