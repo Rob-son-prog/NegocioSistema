@@ -7,14 +7,24 @@ import bcrypt from 'bcryptjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
-// garante que a pasta server/data exista (Render não cria pasta vazia)
-const dataDir = path.join(__dirname, 'data');
-if (!fs.existsSync(dataDir)) {
-  fs.mkdirSync(dataDir, { recursive: true });
+/**
+ * Caminho do banco:
+ * - Em produção (Render), use a env DB_FILE => /data/data.sqlite (disco persistente)
+ * - Fallback local: server/data/data.sqlite
+ */
+const DEFAULT_DB = path.join(process.cwd(), 'server', 'data', 'data.sqlite');
+const DB_FILE = (process.env.DB_FILE || DEFAULT_DB).trim();
+
+// garante que o diretório do arquivo exista
+const dbDir = path.dirname(DB_FILE);
+if (!fs.existsSync(dbDir)) {
+  fs.mkdirSync(dbDir, { recursive: true });
 }
 
-const dbPath = path.join(dataDir, 'data.sqlite');
-const db = new Database(dbPath);
+// log para conferir nos Logs do Render
+console.log('[DB] FILE ->', DB_FILE, 'exists:', fs.existsSync(DB_FILE));
+
+const db = new Database(DB_FILE);
 
 // ---------- criação de tabelas (idempotente) ----------
 db.exec(`
