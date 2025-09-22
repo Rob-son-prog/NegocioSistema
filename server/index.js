@@ -1,16 +1,13 @@
-// no topo do arquivo
-import path from 'path';
-import { fileURLToPath } from 'url';
-const __filename = fileURLToPath(import.meta.url);
-const __dirname  = path.dirname(__filename);
-const PUBLIC_DIR = path.resolve(__dirname, '..'); // aponta para a raiz onde estão index.html, style.css, etc.
-
 // server/index.js
 import 'dotenv/config';
-import express from 'express';
-import cors from 'cors';
+import fs from 'fs';
+import path from 'path';
+import express from 'express';            // só para usar express.json({ type: '*/*' }) no webhook
 import jwt from 'jsonwebtoken';
 import bcrypt from 'bcryptjs';
+
+// cria o app e middlewares (sem rotas) — evita import circular/TDZ
+import { app, PUBLIC_DIR } from './app.js';
 
 // ===== DB (funções) =====
 import {
@@ -50,185 +47,72 @@ import {
   getInstallmentWithCustomer,
 } from './db.js';
 
-// ====== BACKUP (Cloudflare R2 via S3 API) ======
-import fs from 'fs';
-import { S3Client, PutObjectCommand, GetObjectCommand, ListObjectsV2Command } from '@aws-sdk/client-s3';
-
-const {
-  S3_ENDPOINT     = '',
-  S3_BUCKET       = '',
-  S3_ACCESS_KEY_ID = '',
-  S3_SECRET_ACCESS_KEY = '',
-  BACKUP_TOKEN    = '',
-  DB_FILE         = 'server/data/data.sqlite',
-} = process.env;
-
-// S3 Client (Cloudflare R2: usar endpoint custom, region 'auto' e path-style)
-const s3 = new S3Client({
-  region: 'auto',
-  endpoint: S3_ENDPOINT,
-  credentials: {
-    accessKeyId: (S3_ACCESS_KEY_ID || '').trim(),
-    secretAccessKey: (S3_SECRET_ACCESS_KEY || '').trim(),
-  },
-  forcePathStyle: true,
-});
-
-// helper — exige token no header ou query
-function requireBackupToken(req, res) {
-  const provided =
-    req.headers['x-backup-token'] ||
-    req.query.token ||
-    (req.body && req.body.token);
-  if (!BACKUP_TOKEN || String(provided) !== String(BACKUP_TOKEN)) {
-    res.status(403).json({ error: 'Token inválido' });
-    return false;
-  }
-  return true;
-}
-
-// helper — timestamp legível
-function stamp() {
-  const d = new Date();
-  const p = (n) => String(n).padStart(2, '0');
-  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}_${p(d.getHours())}-${p(d.getMinutes())}-${p(d.getSeconds())}`;
-}
-
-// -------- Exportar DB para R2 --------
-app.post('/api/backup/export', express.json(), async (req, res) => {
-  try {
-    if (!requireBackupToken(req, res)) return;
-
-    // lê o arquivo do sqlite (em memória para simplicidade e robustez)
-    const filePath = DB_FILE;
-    if (!fs.existsSync(filePath)) {
-      return res.status(404).json({ error: `Arquivo não encontrado: ${filePath}` });
-    }
-    const buf = fs.readFileSync(filePath);
-
-    const key = `backups/data-${stamp()}.sqlite`;
-
-    await s3.send(new PutObjectCommand({
-      Bucket: S3_BUCKET,
-      Key: key,
-      Body: buf,
-      ContentType: 'application/octet-stream',
-    }));
-
-    res.json({ ok: true, bucket: S3_BUCKET, key, size: buf.length });
-  } catch (e) {
-    console.error('Backup export error:', e);
-    res.status(500).json({ error: 'Falha ao exportar backup', details: e?.message || String(e) });
-  }
-});
-
-// -------- Restaurar último backup do R2 --------
-app.post('/api/backup/restore', express.json(), async (req, res) => {
-  try {
-    if (!requireBackupToken(req, res)) return;
-
-    // lista objetos (pega o mais recente que termina com .sqlite)
-    const list = await s3.send(new ListObjectsV2Command({
-      Bucket: S3_BUCKET,
-      Prefix: 'backups/',
-      MaxKeys: 1000,
-    }));
-
-    const items = (list.Contents || [])
-      .filter(o => o.Key && o.Key.endsWith('.sqlite'))
-      .sort((a, b) => new Date(b.LastModified) - new Date(a.LastModified));
-
-    if (!items.length) {
-      return res.status(404).json({ error: 'Nenhum backup .sqlite encontrado no bucket' });
-    }
-
-    const latest = items[0].Key;
-
-    // baixa para buffer
-    const obj = await s3.send(new GetObjectCommand({
-      Bucket: S3_BUCKET,
-      Key: latest,
-    }));
-
-    const chunks = [];
-    for await (const chunk of obj.Body) chunks.push(chunk);
-    const fileBuf = Buffer.concat(chunks);
-
-    // escreve em arquivo temporário, depois troca de forma segura
-    const dst = DB_FILE;
-    const tmp = `${dst}.restore.tmp`;
-    const bak = `${dst}.bak.${stamp()}`;
-
-    fs.writeFileSync(tmp, fileBuf);          // escreve o novo
-    if (fs.existsSync(dst)) fs.renameSync(dst, bak); // move atual para .bak (mantém um backup local)
-    fs.renameSync(tmp, dst);                 // coloca o novo no lugar
-
-    // **IMPORTANTE**: dependendo de como o sqlite é aberto em `db.js`,
-    // pode ser necessário reiniciar a instância para reabrir o arquivo.
-    // Para segurança, só avisamos e deixamos você reiniciar manualmente.
-    res.json({
-      ok: true,
-      restored_from: latest,
-      local_backup: fs.existsSync(bak) ? bak : null,
-      note: 'Restore concluído. Se o app ainda estiver usando o arquivo antigo, reinicie o serviço no Render.',
-    });
-  } catch (e) {
-    console.error('Backup restore error:', e);
-    res.status(500).json({ error: 'Falha ao restaurar backup', details: e?.message || String(e) });
-  }
-});
-
-
-// ===== (NOVO) backup no R2 =====
-import { backupSqlite, listBackups, presign } from './s3.js';
-
 // ===== Mercado Pago SDK v2 =====
 import { MercadoPagoConfig, Payment } from 'mercadopago';
 
+// ===== R2 backup helpers =====
+import { backupSqlite, listBackups /*, presign*/ } from './s3.js';
+
 // --- ENV/MP ---
-const MP_TOKEN = (process.env.MP_ACCESS_TOKEN || '').replace(/\s+/g, ''); // <- sanitize forte: remove espaços/quebras
-const NODE_ENV = process.env.NODE_ENV || 'development';
-const WEBHOOK_URL = (process.env.WEBHOOK_URL || '').trim(); // <- tira espaços/quebras nas pontas
+const MP_TOKEN    = (process.env.MP_ACCESS_TOKEN || '').replace(/\s+/g, '');
+const NODE_ENV    = process.env.NODE_ENV || 'development';
+const WEBHOOK_URL = (process.env.WEBHOOK_URL || '').trim();
 
 console.log('Mercado Pago token em uso (prefixo):', (MP_TOKEN || '').slice(0, 7) || '(vazio)');
-// Em produção, apenas avisa se não for APP_USR (não derruba o processo)
 if (NODE_ENV === 'production' && !MP_TOKEN.startsWith('APP_USR-')) {
   console.warn('[AVISO] Em produção o MP_ACCESS_TOKEN deveria começar com APP_USR-.');
 }
 
-const mpClient = new MercadoPagoConfig({ accessToken: MP_TOKEN });
+const mpClient  = new MercadoPagoConfig({ accessToken: MP_TOKEN });
 const mpPayment = new Payment(mpClient);
 
-const app = express();
+/* ===========================================================
+   BACKUP R2 — (fica logo após os middlewares do app)
+   =========================================================== */
+const BACKUP_TOKEN = process.env.BACKUP_TOKEN || 'minha-senha-456';
+const DB_FILE = process.env.DB_FILE || path.join(process.cwd(), 'server', 'data', 'data.sqlite');
 
-/* ===================== CORS =====================
-   Libera:
-   - Live Server local (127 e localhost:5500) para desenvolvimento
-   - Domínio do Render para produção
-   Permite requests sem "Origin" (ex.: /health).
-*/
-const allowedOrigins = [
-  'http://127.0.0.1:5500',
-  'http://localhost:5500',
-  'http://localhost:4000',
-  'https://negociosistema.onrender.com',
-];
+// Exporta o SQLite atual para o R2
+app.post('/api/backup/export', async (req, res) => {
+  try {
+    const token = String(req.headers['x-backup-token'] || '');
+    if (token !== BACKUP_TOKEN) return res.status(403).json({ error: 'token inválido' });
 
-app.use(cors({
-  origin(origin, cb) {
-    if (!origin || allowedOrigins.includes(origin)) return cb(null, true);
-    return cb(null, false);
-  },
-  methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization', 'X-Delete-Code'],
-  credentials: true,
-}));
+    const saved = await backupSqlite(DB_FILE);
+    const list  = await listBackups('backups/', 20);
+    res.json({ ok: true, saved, list });
+  } catch (e) {
+    console.error('Backup export error:', e);
+    res.status(500).json({ error: 'Falha no backup', details: String(e?.message || e) });
+  }
+});
 
-app.options('*', cors());
-app.use(express.json());
+// RESTORE a partir de um arquivo .sqlite enviado no body bruto
+app.post('/api/backup/restore', async (req, res) => {
+  try {
+    const token = String(req.headers['x-backup-token'] || '');
+    if (token !== BACKUP_TOKEN) return res.status(403).json({ error: 'token inválido' });
 
-// servir arquivos estáticos do front (index.html, style.css, *.js)
-app.use(express.static(PUBLIC_DIR));
+    const chunks = [];
+    for await (const chunk of req) chunks.push(chunk);
+    const fileBuf = Buffer.concat(chunks);
+
+    const dst = DB_FILE;
+    const bak = `${dst}.bak.${Date.now()}`;
+    const tmp = `${dst}.restore.tmp`;
+
+    fs.writeFileSync(tmp, fileBuf);
+    if (fs.existsSync(dst)) fs.renameSync(dst, bak);
+    fs.renameSync(tmp, dst);
+
+    res.json({ ok: true, restored: dst, bak: fs.existsSync(bak) ? bak : null });
+  } catch (e) {
+    console.error('Falha ao restaurar backup:', e);
+    res.status(500).json({ error: 'Falha ao restaurar backup', details: String(e?.message || e) });
+  }
+});
+
+/* ===================== ROTAS EXISTENTES ===================== */
 
 // rota raiz entrega o index.html
 app.get('/', (_req, res) => {
@@ -259,24 +143,6 @@ function authClient(req, res, next) {
       return res.status(403).json({ error: 'Permissão negada' });
     }
     req.client = payload; // { role:'client', customerId: N }
-    next();
-  } catch {
-    return res.status(401).json({ error: 'Token inválido/expirado' });
-  }
-}
-
-// ============== (NOVO) Middleware: Auth do ADMIN ==============
-function authAdmin(req, res, next) {
-  const auth = req.headers.authorization || '';
-  const token = auth.startsWith('Bearer ') ? auth.slice(7) : null;
-  if (!token) return res.status(401).json({ error: 'Sem token' });
-
-  try {
-    const payload = jwt.verify(token, JWT_SECRET);
-    if (payload.role !== 'admin') {
-      return res.status(403).json({ error: 'Permissão negada' });
-    }
-    req.admin = payload; // { role:'admin', userId: ... }
     next();
   } catch {
     return res.status(401).json({ error: 'Token inválido/expirado' });
@@ -425,7 +291,7 @@ app.delete('/api/customers/:id', (req, res) => {
   try {
     const id = Number(req.params.id);
     if (!id) return res.status(400).json({ error: 'id inválido' });
-  const info = deleteCustomer(id);
+    const info = deleteCustomer(id);
     res.json({ ok: true, changes: info?.changes ?? 0 });
   } catch (e) {
     console.error(e);
@@ -665,7 +531,6 @@ app.post('/api/installments/:id/pix', async (req, res) => {
       return res.status(409).json({ error: 'Parcela já paga' });
     }
 
-    // valor numérico com duas casas
     const rawValue = Number(it.value ?? it.valor ?? 0);
     const transaction_amount = Math.round((rawValue + Number.EPSILON) * 100) / 100;
     if (!transaction_amount || Number.isNaN(transaction_amount)) {
@@ -760,43 +625,11 @@ app.post('/api/pix/webhook', express.json({ type: '*/*' }), async (req, res) => 
   }
 });
 
-// ============== (NOVO) Rotas de BACKUP ==============
-app.post('/api/backups/sqlite', authAdmin, async (_req, res) => {
-  try {
-    const dbPath = path.join(__dirname, 'data', 'data.sqlite');
-    const { key, size } = await backupSqlite(dbPath);
-    res.status(201).json({ ok: true, key, size });
-  } catch (e) {
-    console.error('backup error:', e);
-    res.status(500).json({ error: 'Falha ao criar backup' });
-  }
-});
-
-app.get('/api/backups', authAdmin, async (req, res) => {
-  try {
-    const limit = Math.min(Number(req.query.limit) || 50, 200);
-    const rows = await listBackups('backups/', limit);
-    res.json(rows);
-  } catch (e) {
-    console.error('list backups error:', e);
-    res.status(500).json({ error: 'Falha ao listar backups' });
-  }
-});
-
-app.get('/api/backups/presign', authAdmin, async (req, res) => {
-  try {
-    const key = String(req.query.key || '');
-    if (!key) return res.status(400).json({ error: 'key é obrigatório' });
-    const url = await presign(key, 600); // 10 minutos
-    res.json({ url, expires_in: 600 });
-  } catch (e) {
-    console.error('presign error:', e);
-    res.status(500).json({ error: 'Falha ao gerar link' });
-  }
-});
-
 const port = process.env.PORT || 4000;
 const host = '0.0.0.0';
 app.listen(port, host, () => {
   console.log(`API rodando em http://localhost:${port}`);
 });
+
+// (opcional) export default caso você queira importar o app em outro lugar
+export default app;
