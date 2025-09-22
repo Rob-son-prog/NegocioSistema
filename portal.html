@@ -5,6 +5,10 @@
   <title>Portal do cliente</title>
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <link rel="stylesheet" href="style.css?v=6" />
+  <style>
+    /* opcional, deixa o scroll suave em toda a página */
+    html { scroll-behavior: smooth; }
+  </style>
 </head>
 <body class="dashboard">
   <div class="client-head">
@@ -30,6 +34,9 @@
         <button id="btnSairCliente" class="item danger" style="margin-top:8px; display:none">Sair</button>
       </div>
     </aside>
+
+    <!-- Âncora usada para rolar a tela até a área do PIX -->
+    <div id="pixTopAnchor"></div>
 
     <!-- Modal PIX -->
     <div id="pixModal" class="modal" style="display:none;">
@@ -89,7 +96,6 @@
   <script src="config.js?v=3"></script>
   <script src="portal.js?v=3"></script>
 
-
   <!-- Controle de modo (admin x cliente) + logout do cliente -->
   <script>
   (function () {
@@ -131,6 +137,44 @@
       }
     }
   })();
+  </script>
+
+  <!-- Auto-scroll para o PIX assim que o modal aparecer -->
+  <script>
+    (function () {
+      const anchor = document.getElementById('pixTopAnchor');
+      const modal  = document.getElementById('pixModal');
+
+      function scrollToPix() {
+        const target = anchor || modal;
+        if (!target) return;
+        requestAnimationFrame(() => {
+          target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        });
+        // foco ajuda no mobile (evita ficar perdido na tela)
+        if (modal) { modal.setAttribute('tabindex','-1'); modal.focus?.(); }
+      }
+
+      if (modal) {
+        // observa quando o modal muda de display/visibilidade
+        const obs = new MutationObserver(() => {
+          const st = getComputedStyle(modal);
+          if (st.display !== 'none' && st.visibility !== 'hidden') {
+            scrollToPix();
+          }
+        });
+        obs.observe(modal, { attributes: true, attributeFilter: ['style', 'class'] });
+      }
+
+      // caso queira disparar manualmente em portal.js:
+      // window.dispatchEvent(new CustomEvent('pix:show'))
+      window.addEventListener('pix:show', scrollToPix);
+
+      // se abrir com #pix na URL, rola ao carregar
+      if (location.hash === '#pix') {
+        window.addEventListener('load', scrollToPix);
+      }
+    })();
   </script>
 </body>
 </html>

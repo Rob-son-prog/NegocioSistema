@@ -350,6 +350,12 @@ function openPixModal({ installment_id, qr_base64, qr_code, payment_id, ticket_u
   // mostrar
   modal.style.display = 'block';
 
+  // >>> NOVO: ao abrir o modal, rola para a área do PIX e emite evento opcional
+  try {
+    document.getElementById('pixTopAnchor')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    window.dispatchEvent(new CustomEvent('pix:show'));
+  } catch {}
+
   // copiar
   copy?.addEventListener('click', async () => {
     try { await navigator.clipboard.writeText(code.value); copy.textContent = 'Copiado!'; setTimeout(()=> copy.textContent = 'Copiar', 1500); }
