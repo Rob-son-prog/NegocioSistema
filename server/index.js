@@ -5,7 +5,7 @@ import path from 'path';
 import express from 'express';            // só para usar express.json({ type: '*/*' }) no webhook
 import jwt from 'jsonwebtoken';
 import bcrypt from 'bcryptjs';
-
+import './server/index.js';
 // cria o app e middlewares (sem rotas) — evita import circular/TDZ
 import { app, PUBLIC_DIR } from './app.js';
 
