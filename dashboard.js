@@ -1,4 +1,5 @@
-// dashboard.js — KPIs + lista e marcação visual
+/* ===================== dashboard.js ===================== */
+/* KPIs + lista + marcação visual (sem alterar rotas)      */
 
 /************ BASE DA API E TOKEN ************/
 const CFG  = window.APP_CONFIG || {};
@@ -20,8 +21,7 @@ const elKpiRecebidos  = $('#kpi-recebidos');
 const elKpiNegocios   = $('#kpi-negocios');
 const elKpiVendas     = $('#kpi-vendas');
 
-const brl = (v) =>
-  (Number(v || 0)).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
+const brl = (v) => (Number(v || 0)).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
 
 const fdate = (iso) => {
   if (!iso) return '—';
@@ -30,28 +30,32 @@ const fdate = (iso) => {
 };
 
 async function fetchJSON(url, opts = {}) {
-  const r = await fetch(url, {
-    ...opts,
-    headers: { ...(opts.headers || {}), ...AUTH_HEADERS }
-  });
+  const r = await fetch(url, { ...opts, headers: { ...(opts.headers || {}), ...AUTH_HEADERS } });
   const text = await r.text();
-  let data;
-  try { data = JSON.parse(text); } catch { data = {}; }
+  let data; try { data = JSON.parse(text); } catch { data = {}; }
   if (!r.ok) throw new Error(data?.error || `Erro de requisição: ${r.status} ${r.statusText}`);
   return data;
 }
 
 /************ Datas/estados ************/
 function monthRange(d = new Date()) {
+  // intervalo do mês ATUAL (fechado no começo do próximo mês)
   const start = new Date(d.getFullYear(), d.getMonth(), 1);
-  const end   = new Date(d.getFullYear(), d.getMonth() + 1, 1); // exclusivo
+  const end   = new Date(d.getFullYear(), d.getMonth() + 1, 1);
   return { start, end };
 }
-function inMonth(dateStr, { start, end }) {
+function yearRange(d = new Date()) {
+  // intervalo do ANO CORRENTE inteiro (jan 1 → jan 1 próximo)
+  const start = new Date(d.getFullYear(), 0, 1);
+  const end   = new Date(d.getFullYear() + 1, 0, 1);
+  return { start, end };
+}
+function inRange(dateStr, { start, end }) {
   if (!dateStr) return false;
   const dt = new Date(String(dateStr).replace(' ', 'T'));
   return dt >= start && dt < end;
 }
+
 function isRemoved(x) {
   const st = String(x?.status || '').toLowerCase();
   return !!(
@@ -63,10 +67,11 @@ function asNumberTotal(c) {
   return Number(c.total ?? c.value ?? c.amount ?? c.contract_total ?? 0);
 }
 function pickCreatedAt(c) {
+  // tenta vários nomes comuns de data de criação
   return c.created_at || c.createdAt || c.data || c.dt || null;
 }
 
-/************ Total imutável (cache local) ************/
+/************ Total imutável (cache local por contrato) ************/
 const initKey = (id) => `kpi:contract:${id}:initial_total`;
 function getInitialTotal(c) {
   const id = c?.id;
@@ -83,7 +88,7 @@ function forgetInitialTotal(id) {
   try { localStorage.removeItem(initKey(id)); } catch {}
 }
 
-/************ Contratos — tenta várias rotas ************/
+/************ Contratos — tenta várias rotas (sem mudar endpoints) ************/
 async function getAllContracts() {
   const endpoints = [
     `${BASE}/api/contracts?all=1`,
@@ -115,16 +120,17 @@ async function loadKPIs() {
   try {
     const contracts = await getAllContracts();
 
-    // Negócios feitos
-    const negocios = contracts
-      .filter(c => !isRemoved(c))
+    // Negócios feitos (ANO CORRENTE inteiro)
+    const yr = yearRange();
+    const negociosAno = contracts
+      .filter(c => !isRemoved(c) && inRange(pickCreatedAt(c), yr))
       .reduce((s, c) => s + getInitialTotal(c), 0);
-    if (elKpiNegocios) elKpiNegocios.textContent = brl(negocios);
+    if (elKpiNegocios) elKpiNegocios.textContent = brl(negociosAno);
 
-    // Vendas (mês)
-    const { start, end } = monthRange();
+    // Vendas (mês) — soma dos contratos criados no MÊS ATUAL
+    const mr = monthRange();
     const vendasMes = contracts
-      .filter(c => !isRemoved(c) && inMonth(pickCreatedAt(c), { start, end }))
+      .filter(c => !isRemoved(c) && inRange(pickCreatedAt(c), mr))
       .reduce((s, c) => s + getInitialTotal(c), 0);
     if (elKpiVendas) elKpiVendas.textContent = brl(vendasMes);
   } catch (e) {
@@ -163,14 +169,14 @@ async function loadOrders() {
   try {
     const items = await fetchJSON(`${BASE}/api/contracts/recent?limit=50`);
     if (!items?.length) {
-      listEl.innerHTML = `<div class="muted">Nenhum pedido ainda…</div>`;
+      if (listEl) listEl.innerHTML = `<div class="muted">Nenhum pedido ainda…</div>`;
       return;
     }
-    listEl.innerHTML = items.map(rowTemplate).join('');
+    if (listEl) listEl.innerHTML = items.map(rowTemplate).join('');
     await markOverdues(items);
   } catch (e) {
     console.error(e);
-    listEl.innerHTML = `<div class="muted">${e.message}</div>`;
+    if (listEl) listEl.innerHTML = `<div class="muted">${e.message}</div>`;
   }
 }
 
@@ -190,6 +196,8 @@ function isPastISO(d) {
 }
 
 async function markOverdues(contracts) {
+  if (!Array.isArray(contracts) || !contracts.length) return;
+
   const byCustomer = new Map();
   for (const c of contracts) {
     if (!byCustomer.has(c.customer_id)) byCustomer.set(c.customer_id, []);
@@ -241,9 +249,9 @@ document.addEventListener('click', async (e) => {
     try {
       localStorage.removeItem('admin_token');
       localStorage.removeItem('token');
-      // redireciona pelo href normal
+      // permite que o link navegue para index.html
     } catch {}
-    return; // deixa o link seguir para index.html
+    return;
   }
 
   const portalId = t.dataset.portal;
@@ -254,12 +262,10 @@ document.addEventListener('click', async (e) => {
     location.href = `portal.html?id=${portalId}`;
     return;
   }
-
   if (editId) {
     location.href = `editar-cliente.html?id=${editId}`;
     return;
   }
-
   if (delId) {
     const ok = confirm('Excluir ESTE contrato e TODAS as parcelas?');
     if (!ok) return;
@@ -273,8 +279,8 @@ document.addEventListener('click', async (e) => {
         method: 'DELETE',
         headers: { ...AUTH_HEADERS, 'X-Delete-Code': code },
       });
-      const text = await r.text();
-      let data; try { data = JSON.parse(text); } catch { data = {}; }
+      const txt = await r.text();
+      let data; try { data = JSON.parse(txt); } catch { data = {}; }
 
       if (!r.ok) {
         alert(data?.error || `Falha ao excluir (HTTP ${r.status}).`);
@@ -291,6 +297,4 @@ document.addEventListener('click', async (e) => {
 });
 
 document.addEventListener('DOMContentLoaded', boot);
-
-// (Opcional) Log para depuração
-// console.log('[dashboard] BASE =', BASE || '(mesma origem)', 'token?', !!TOKEN);
+/* ===================== fim dashboard.js ===================== */
