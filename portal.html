@@ -5,9 +5,36 @@
   <title>Portal do cliente</title>
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <link rel="stylesheet" href="style.css?v=6" />
+
+  <!-- Força layout desktop quando for ADMIN -->
   <style>
-    /* opcional, deixa o scroll suave em toda a página */
-    html { scroll-behavior: smooth; }
+    /* layout principal em grid, mesmo em telas menores, quando admin */
+    body[data-mode="admin"] .layout{
+      display: grid !important;
+      grid-template-columns: 260px 1fr !important;
+      gap: 24px !important;
+      align-items: start;
+    }
+    body[data-mode="admin"] .sidebar{
+      position: sticky; top: 16px; height: fit-content;
+    }
+    body[data-mode="admin"] .cards{
+      grid-template-columns: repeat(3, minmax(0, 1fr)) !important;
+    }
+    body[data-mode="admin"] .panel .panel-body{
+      display: block !important;
+    }
+
+    /* anula “empilhamentos” de breakpoints no modo admin */
+    @media (max-width: 1200px){
+      body[data-mode="admin"] .layout{
+        grid-template-columns: 260px 1fr !important;
+      }
+      body[data-mode="admin"] .sidebar,
+      body[data-mode="admin"] main.content{
+        width: auto !important;
+      }
+    }
   </style>
 </head>
 <body class="dashboard">
@@ -34,9 +61,6 @@
         <button id="btnSairCliente" class="item danger" style="margin-top:8px; display:none">Sair</button>
       </div>
     </aside>
-
-    <!-- Âncora usada para rolar a tela até a área do PIX -->
-    <div id="pixTopAnchor"></div>
 
     <!-- Modal PIX -->
     <div id="pixModal" class="modal" style="display:none;">
@@ -137,44 +161,6 @@
       }
     }
   })();
-  </script>
-
-  <!-- Auto-scroll para o PIX assim que o modal aparecer -->
-  <script>
-    (function () {
-      const anchor = document.getElementById('pixTopAnchor');
-      const modal  = document.getElementById('pixModal');
-
-      function scrollToPix() {
-        const target = anchor || modal;
-        if (!target) return;
-        requestAnimationFrame(() => {
-          target.scrollIntoView({ behavior: 'smooth', block: 'start' });
-        });
-        // foco ajuda no mobile (evita ficar perdido na tela)
-        if (modal) { modal.setAttribute('tabindex','-1'); modal.focus?.(); }
-      }
-
-      if (modal) {
-        // observa quando o modal muda de display/visibilidade
-        const obs = new MutationObserver(() => {
-          const st = getComputedStyle(modal);
-          if (st.display !== 'none' && st.visibility !== 'hidden') {
-            scrollToPix();
-          }
-        });
-        obs.observe(modal, { attributes: true, attributeFilter: ['style', 'class'] });
-      }
-
-      // caso queira disparar manualmente em portal.js:
-      // window.dispatchEvent(new CustomEvent('pix:show'))
-      window.addEventListener('pix:show', scrollToPix);
-
-      // se abrir com #pix na URL, rola ao carregar
-      if (location.hash === '#pix') {
-        window.addEventListener('load', scrollToPix);
-      }
-    })();
   </script>
 </body>
 </html>
