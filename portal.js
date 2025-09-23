@@ -203,35 +203,52 @@ function render(data){
   if (!visiveis.length){ el.parcelas.innerHTML = '<div class="muted">Não há parcelas para exibir.</div>'; return; }
 
   const sorted = [...visiveis].sort((a,b)=> (a.due<b.due?-1:1));
-  sorted.forEach((p, idx)=>{
-    const value  = Number(p.value ?? p.valor ?? 0);
-    const valStr = brl(value);
-    const dueISO = (p.due ?? p.venc ?? '').slice(0,10);
-    const due    = fdate(dueISO);
-    const status = String(p.status || 'Aberto');
-    const st     = status.toLowerCase();
+ // 1) Totais por contrato (para poder exibir 1/3, 2/3, etc.)
+const totalsByContract = visiveis.reduce((acc, it) => {
+  const cid = it.contract_id;
+  acc[cid] = (acc[cid] || 0) + 1;
+  return acc;
+}, {});
 
-    const today=new Date(); today.setHours(0,0,0,0);
-    const dv=new Date((p.due||p.venc||'')+'T00:00:00');
-    const chipClass = st==='pago' ? 'pill pago' : (dv<today ? 'pill atrasado' : 'pill aberto');
+// 2) Contador sequencial por contrato
+const seqByContract = {};
 
-    const actions = `
-      <button class="btn sm" data-pix="${p.id}">Gerar PIX</button>
-      ${document.body.dataset.mode === 'admin' && st!=='pago' ? `<button class="btn sm primary" data-pay="${p.id}">Baixar</button>` : ''}
-      ${document.body.dataset.mode === 'admin' ? `<button class="btn sm danger" data-del="${p.id}" data-info="Parcela #${p.id} • ${valStr} • venc. ${due}">Excluir</button>` : ''}
-    `;
+sorted.forEach((p, idx) => {
+  const value  = Number(p.value ?? p.valor ?? 0);
+  const valStr = brl(value);
+  const dueISO = (p.due ?? p.venc ?? '').slice(0,10);
+  const due    = fdate(dueISO);
+  const status = String(p.status || 'Aberto');
+  const st     = status.toLowerCase();
 
-    const row = document.createElement('div');
-    row.className = 'parcel-row';
-    row.innerHTML = `
-      <div class="parcel-col left">
-        <div class="p-title">Parcela #${p.id || idx+1} — <strong>${valStr}</strong></div>
-        <div class="p-meta">Venc.: ${due} · <span class="${chipClass}">${status}</span>${p.paid_at?` · pago em ${String(p.paid_at).slice(0,10)}`:''}</div>
-      </div>
-      <div class="parcel-col actions">${actions}</div>
-    `;
-    el.parcelas.appendChild(row);
-  });
+  const today = new Date(); today.setHours(0,0,0,0);
+  const dv = new Date((p.due || p.venc || '') + 'T00:00:00');
+  const chipClass = st === 'pago' ? 'pill pago' : (dv < today ? 'pill atrasado' : 'pill aberto');
+
+  // >>> número sequencial por contrato
+  const cid = p.contract_id;
+  seqByContract[cid] = (seqByContract[cid] || 0) + 1;
+  const num = seqByContract[cid];
+  const tot = totalsByContract[cid];     // se quiser mostrar "1/3"
+
+  const actions = `
+    <button class="btn sm" data-pix="${p.id}">Gerar PIX</button>
+    ${document.body.dataset.mode === 'admin' && st!=='pago' ? `<button class="btn sm primary" data-pay="${p.id}">Baixar</button>` : ''}
+    ${document.body.dataset.mode === 'admin' ? `<button class="btn sm danger" data-del="${p.id}" data-info="Parcela #${num}/${tot} • ${valStr} • venc. ${due}">Excluir</button>` : ''}
+  `;
+
+  const row = document.createElement('div');
+  row.className = 'parcel-row';
+  row.innerHTML = `
+    <div class="parcel-col left">
+      <div class="p-title">Parcela #${num}${tot ? `/${tot}` : ''} — <strong>${valStr}</strong></div>
+      <div class="p-meta">Venc.: ${due} · <span class="${chipClass}">${status}</span>${p.paid_at ? ` · pago em ${String(p.paid_at).slice(0,10)}` : ''}</div>
+    </div>
+    <div class="parcel-col actions">${actions}</div>
+  `;
+  el.parcelas.appendChild(row);
+});
+
 
   // >>> Ações (PIX / BAIXAR / EXCLUIR)
   el.parcelas.onclick = async (e)=>{
