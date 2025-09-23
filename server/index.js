@@ -316,7 +316,7 @@ app.post('/api/contracts', (req, res) => {
       customer_id,
       cpf,
       base,
-      margin = 0,
+      margin = 0,      // % ao mês
       parcelas,
       first_due,
       tipo = 'negocio',
@@ -327,7 +327,10 @@ app.post('/api/contracts', (req, res) => {
       });
     }
 
-    const total = Number(base) * (1 + Number(margin || 0) / 100);
+    // >>> NOVO: juros simples ao mês
+    const n = Number(parcelas);
+    const m = Number(margin || 0) / 100;       // percentual ao mês (ex.: 12 => 0.12)
+    const total = Math.round((Number(base) * (1 + m * n) + Number.EPSILON) * 100) / 100;
 
     let cid = Number(customer_id) || null;
     if (!cid) {
@@ -339,7 +342,7 @@ app.post('/api/contracts', (req, res) => {
     const contract_id = createContractAndInstallments({
       customer_id: cid,
       total,
-      parcelas: Number(parcelas),
+      parcelas: n,
       first_due, // "YYYY-MM-DD"
       tipo,
     });
@@ -350,6 +353,7 @@ app.post('/api/contracts', (req, res) => {
     res.status(500).json({ error: 'internal' });
   }
 });
+
 
 app.get('/api/contracts/recent', (req, res) => {
   try {
