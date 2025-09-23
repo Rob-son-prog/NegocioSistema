@@ -319,6 +319,23 @@ function render(data){
   };
 }
 
+/* ===== helper: rolar até a área do PIX ===== */
+function scrollToPixBox() {
+  // tenta focar no modal, senão no textarea, senão sobe pro topo
+  const target =
+    document.getElementById('pixModal') ||
+    document.getElementById('pixCode') ||
+    document.getElementById('pixQrWrap');
+
+  if (target && typeof target.scrollIntoView === 'function') {
+    // compensa cabeçalhos/sticky – 16px de margem
+    const y = target.getBoundingClientRect().top + window.pageYOffset - 16;
+    window.scrollTo({ top: y, behavior: 'smooth' });
+  } else {
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  }
+}
+
 // ===== Modal PIX (abrir, copiar, fechar e polling) =====
 let _pixPoll = null;
 function openPixModal({ installment_id, qr_base64, qr_code, payment_id, ticket_url }){
@@ -350,11 +367,12 @@ function openPixModal({ installment_id, qr_base64, qr_code, payment_id, ticket_u
   // mostrar
   modal.style.display = 'block';
 
-  // >>> NOVO: ao abrir o modal, rola para a área do PIX e emite evento opcional
-  try {
-    document.getElementById('pixTopAnchor')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
-    window.dispatchEvent(new CustomEvent('pix:show'));
-  } catch {}
+  // >>> rolar até o topo onde aparece o PIX
+  setTimeout(() => {
+    scrollToPixBox();
+    // evita que o foco faça a página “saltar” de novo
+    code?.focus({ preventScroll: true });
+  }, 30);
 
   // copiar
   copy?.addEventListener('click', async () => {
